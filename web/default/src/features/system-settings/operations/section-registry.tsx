@@ -55,6 +55,8 @@ const OPERATIONS_SECTIONS = [
           AutomaticDisableKeywords: settings.AutomaticDisableKeywords,
           AutomaticDisableStatusCodes: settings.AutomaticDisableStatusCodes,
           AutomaticRetryStatusCodes: settings.AutomaticRetryStatusCodes,
+          'operation_setting.param_preflight_interception_rules':
+            settings['operation_setting.param_preflight_interception_rules'],
           'monitor_setting.auto_test_channel_enabled':
             settings['monitor_setting.auto_test_channel_enabled'],
           'monitor_setting.auto_test_channel_minutes':

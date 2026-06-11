@@ -123,6 +123,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	newAPIError = applyParamPreflightInterception(c, relayInfo)
+	if newAPIError != nil {
+		return
+	}
+
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
@@ -351,6 +356,94 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	return operation_setting.ShouldRetryByStatusCode(code)
+}
+
+func applyParamPreflightInterception(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if !isParamPreflightEligiblePath(c) {
+		return nil
+	}
+	ctx := relaycommon.BuildParamOverrideContext(relayInfo)
+	if ctx == nil {
+		ctx = make(map[string]interface{})
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		ctx["request_path"] = c.Request.URL.Path
+	}
+	candidates := operation_setting.GetParamPreflightCandidateGroups(ctx)
+	if len(candidates) == 0 {
+		return nil
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+		}
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	result, err := operation_setting.EvaluateParamPreflight(body, ctx, candidates)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeParamPreflightIntercepted, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	if result == nil {
+		return nil
+	}
+	operation_setting.SetParamPreflightResult(c, result)
+	errInfo := types.NewErrorWithStatusCode(errors.New(result.Message), types.ErrorCodeParamPreflightIntercepted, result.StatusCode, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	recordParamPreflightLog(c, relayInfo, result, errInfo)
+	return errInfo
+}
+
+func isParamPreflightEligiblePath(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	path := strings.ToLower(c.Request.URL.Path)
+	if strings.HasPrefix(path, "/v1/chat/completions") ||
+		strings.HasPrefix(path, "/v1/responses") ||
+		strings.HasPrefix(path, "/v1/response") ||
+		strings.HasPrefix(path, "/v1/messages") ||
+		strings.HasPrefix(path, "/v1/beta") {
+		return true
+	}
+	return strings.Contains(path, ":generatecontent") ||
+		strings.Contains(path, ":streamgeneratecontent") ||
+		strings.Contains(path, ":embedcontent") ||
+		strings.Contains(path, ":batchembedcontents")
+}
+
+func recordParamPreflightLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, result *operation_setting.ParamPreflightResult, errInfo *types.NewAPIError) {
+	if !constant.ErrorLogEnabled || result == nil || errInfo == nil {
+		return
+	}
+	userId := c.GetInt("id")
+	tokenName := c.GetString("token_name")
+	modelName := c.GetString("original_model")
+	if relayInfo != nil && relayInfo.OriginModelName != "" {
+		modelName = relayInfo.OriginModelName
+	}
+	tokenId := c.GetInt("token_id")
+	userGroup := c.GetString("group")
+	other := map[string]interface{}{
+		"preflight_intercepted": true,
+		"preflight_group":       result.Group,
+		"preflight_rule":        result.Rule,
+		"preflight_source":      "operation_setting.param_preflight_interception_rules",
+		"error_type":            errInfo.GetErrorType(),
+		"error_code":            errInfo.GetErrorCode(),
+		"status_code":           errInfo.StatusCode,
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	model.RecordErrorLog(c, userId, 0, modelName, tokenName, errInfo.MaskSensitiveError(), tokenId, int(time.Since(startTime).Seconds()), common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {

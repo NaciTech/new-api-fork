@@ -56,6 +56,17 @@ const colors = [
   'yellow',
 ];
 
+const logTypesWithRequestDetails = [0, 2, 5, 6, 51];
+const logTypesWithErrorDetails = [2, 5, 51];
+
+function hasRequestDetails(type) {
+  return logTypesWithRequestDetails.includes(type);
+}
+
+function hasErrorDetails(type) {
+  return logTypesWithErrorDetails.includes(type);
+}
+
 function formatRatio(ratio) {
   if (ratio === undefined || ratio === null) {
     return '-';
@@ -131,6 +142,12 @@ function renderType(type, t) {
       return (
         <Tag color='teal' shape='circle'>
           {t('退款')}
+        </Tag>
+      );
+    case 51:
+      return (
+        <Tag color='amber' shape='circle'>
+          {t('参数拦截')}
         </Tag>
       );
     default:
@@ -518,11 +535,7 @@ export const getLogsColumns = ({
           }
         }
 
-        return isAdminUser &&
-          (record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6) ? (
+        return isAdminUser && hasRequestDetails(record.type) ? (
           <Space>
             <span style={{ position: 'relative', display: 'inline-block' }}>
               <Tooltip content={record.channel_name || t('未知渠道')}>
@@ -613,10 +626,7 @@ export const getLogsColumns = ({
       title: t('令牌'),
       dataIndex: 'token_name',
       render: (text, record, index) => {
-        return record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6 ? (
+        return hasRequestDetails(record.type) ? (
           <div>
             <Tag
               color='grey'
@@ -639,12 +649,7 @@ export const getLogsColumns = ({
       title: t('分组'),
       dataIndex: 'group',
       render: (text, record, index) => {
-        if (
-          record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6
-        ) {
+        if (hasRequestDetails(record.type)) {
           if (record.group) {
             return <>{renderGroup(record.group)}</>;
           } else {
@@ -684,10 +689,7 @@ export const getLogsColumns = ({
       title: t('模型'),
       dataIndex: 'model_name',
       render: (text, record, index) => {
-        return record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6 ? (
+        return hasRequestDetails(record.type) ? (
           <>{renderModelName(record, copyText, t)}</>
         ) : (
           <></>
@@ -699,7 +701,7 @@ export const getLogsColumns = ({
       title: t('用时/首字'),
       dataIndex: 'use_time',
       render: (text, record, index) => {
-        if (!(record.type === 2 || record.type === 5)) {
+        if (!hasErrorDetails(record.type)) {
           return <></>;
         }
         if (record.is_stream) {
@@ -846,8 +848,7 @@ export const getLogsColumns = ({
       dataIndex: 'ip',
       render: (text, record, index) => {
         const showIp =
-          (record.type === 2 ||
-            record.type === 5 ||
+          (hasErrorDetails(record.type) ||
             (isAdminUser && record.type === 1)) &&
           text;
         return showIp ? (
@@ -874,7 +875,7 @@ export const getLogsColumns = ({
       title: t('重试'),
       dataIndex: 'retry',
       render: (text, record, index) => {
-        if (!(record.type === 2 || record.type === 5)) {
+        if (!hasErrorDetails(record.type)) {
           return <></>;
         }
         let content = t('渠道') + `：${record.channel}`;

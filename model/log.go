@@ -64,6 +64,8 @@ const (
 	LogTypeSystem  = 4
 	LogTypeError   = 5
 	LogTypeRefund  = 6
+
+	LogTypePreflightIntercept = 51
 )
 
 func formatUserLogs(logs []*Log, startIdx int) {
@@ -173,10 +175,15 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		}
 	}
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
-		Type:             LogTypeError,
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type: func() int {
+			if intercepted, ok := other["preflight_intercepted"].(bool); ok && intercepted {
+				return LogTypePreflightIntercept
+			}
+			return LogTypeError
+		}(),
 		Content:          content,
 		PromptTokens:     0,
 		CompletionTokens: 0,

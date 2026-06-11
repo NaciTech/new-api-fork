@@ -176,6 +176,14 @@ export interface LogOtherData {
   fee_quota?: number
   // Reject / intercept reason (admin)
   reject_reason?: string
+  // Param preflight intercept (type=51)
+  preflight_intercepted?: boolean
+  preflight_group?: string
+  preflight_rule?: string
+  preflight_source?: string
+  error_type?: string
+  error_code?: string
+  status_code?: number
   // Task-related fields (for refund logs, type=6)
   is_task?: boolean
   task_id?: string

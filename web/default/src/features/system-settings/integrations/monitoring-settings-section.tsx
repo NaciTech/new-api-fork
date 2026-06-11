@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import i18next from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
@@ -42,7 +43,6 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 
@@ -52,6 +52,103 @@ const numericString = z.string().refine((value) => {
   return !Number.isNaN(Number(trimmed)) && Number(trimmed) >= 0
 }, 'Enter a non-negative number or leave empty')
 
+function validateParamPreflightRulesJson(raw: string) {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return { ok: true as const }
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      return {
+        ok: false as const,
+        message: i18next.t('Param preflight rules must be an object'),
+      }
+    }
+    const config = parsed as {
+      default_status_code?: unknown
+      groups?: unknown
+    }
+    if (
+      config.default_status_code !== undefined &&
+      (typeof config.default_status_code !== 'number' ||
+        !Number.isInteger(config.default_status_code) ||
+        config.default_status_code < 400 ||
+        config.default_status_code > 599)
+    ) {
+      return {
+        ok: false as const,
+        message: i18next.t(
+          'default_status_code must be an integer between 400 and 599'
+        ),
+      }
+    }
+    if (config.groups !== undefined && !Array.isArray(config.groups)) {
+      return {
+        ok: false as const,
+        message: i18next.t('groups must be an array'),
+      }
+    }
+    for (const group of (config.groups as unknown[]) || []) {
+      if (!group || Array.isArray(group) || typeof group !== 'object') {
+        return {
+          ok: false as const,
+          message: i18next.t('each item in groups must be an object'),
+        }
+      }
+      const groupConfig = group as { rules?: unknown }
+      if (groupConfig.rules !== undefined && !Array.isArray(groupConfig.rules)) {
+        return {
+          ok: false as const,
+          message: i18next.t('rules must be an array'),
+        }
+      }
+      for (const rule of (groupConfig.rules as unknown[]) || []) {
+        if (!rule || Array.isArray(rule) || typeof rule !== 'object') {
+          return {
+            ok: false as const,
+            message: i18next.t('each item in rules must be an object'),
+          }
+        }
+        const ruleConfig = rule as { message?: unknown; conditions?: unknown }
+        if (
+          typeof ruleConfig.message !== 'string' ||
+          !ruleConfig.message.trim()
+        ) {
+          return {
+            ok: false as const,
+            message: i18next.t(
+              'each param intercept rule must include message'
+            ),
+          }
+        }
+        if (
+          !Array.isArray(ruleConfig.conditions) ||
+          ruleConfig.conditions.length === 0
+        ) {
+          return {
+            ok: false as const,
+            message: i18next.t(
+              'each param intercept rule must include non-empty conditions'
+            ),
+          }
+        }
+      }
+    }
+    return { ok: true as const }
+  } catch {
+    return {
+      ok: false as const,
+      message: i18next.t('Param preflight rules must be valid JSON'),
+    }
+  }
+}
+
+/**
+ * IMPORTANT: react-hook-form 7 interprets dotted `name` strings as nested
+ * paths. Model dotted server keys with nested zod objects and only flatten
+ * back to option keys right before persisting.
+ */
 const monitoringSchema = z
   .object({
     ChannelDisableThreshold: numericString,
@@ -61,6 +158,9 @@ const monitoringSchema = z
     AutomaticDisableKeywords: z.string(),
     AutomaticDisableStatusCodes: z.string(),
     AutomaticRetryStatusCodes: z.string(),
+    operation_setting: z.object({
+      param_preflight_interception_rules: z.string(),
+    }),
     monitor_setting: z.object({
       auto_test_channel_enabled: z.boolean(),
       auto_test_channel_minutes: z.coerce
@@ -70,6 +170,19 @@ const monitoringSchema = z
     }),
   })
   .superRefine((values, ctx) => {
+    const preflightRules =
+      values.operation_setting.param_preflight_interception_rules ?? ''
+    const preflightValidation = validateParamPreflightRulesJson(preflightRules)
+    if (!preflightValidation.ok) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [
+          'operation_setting',
+          'param_preflight_interception_rules',
+        ],
+        message: preflightValidation.message,
+      })
+    }
     const disableParsed = parseHttpStatusCodeRules(
       values.AutomaticDisableStatusCodes
     )
@@ -109,6 +222,7 @@ type MonitoringSettingsSectionProps = {
     AutomaticDisableKeywords: string
     AutomaticDisableStatusCodes: string
     AutomaticRetryStatusCodes: string
+    'operation_setting.param_preflight_interception_rules': string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
   }
@@ -126,6 +240,7 @@ type NormalizedMonitoringValues = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   AutomaticRetryStatusCodes: string
+  'operation_setting.param_preflight_interception_rules': string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
 }
@@ -142,6 +257,10 @@ const buildFormDefaults = (
   ),
   AutomaticDisableStatusCodes: defaults.AutomaticDisableStatusCodes ?? '',
   AutomaticRetryStatusCodes: defaults.AutomaticRetryStatusCodes ?? '',
+  operation_setting: {
+    param_preflight_interception_rules:
+      defaults['operation_setting.param_preflight_interception_rules'] ?? '',
+  },
   monitor_setting: {
     auto_test_channel_enabled:
       defaults['monitor_setting.auto_test_channel_enabled'],
@@ -166,6 +285,9 @@ const normalizeDefaults = (
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     defaults.AutomaticRetryStatusCodes ?? ''
   ).normalized,
+  'operation_setting.param_preflight_interception_rules': (
+    defaults['operation_setting.param_preflight_interception_rules'] ?? ''
+  ).trim(),
   'monitor_setting.auto_test_channel_enabled':
     defaults['monitor_setting.auto_test_channel_enabled'],
   'monitor_setting.auto_test_channel_minutes':
@@ -188,6 +310,8 @@ const normalizeFormValues = (
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     values.AutomaticRetryStatusCodes
   ).normalized,
+  'operation_setting.param_preflight_interception_rules':
+    values.operation_setting.param_preflight_interception_rules.trim(),
   'monitor_setting.auto_test_channel_enabled':
     values.monitor_setting.auto_test_channel_enabled,
   'monitor_setting.auto_test_channel_minutes':
@@ -199,8 +323,13 @@ export function MonitoringSettingsSection({
 }: MonitoringSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-  const baselineRef = useRef<NormalizedMonitoringValues>(
-    normalizeDefaults(defaultValues)
+  const normalizedDefaults = useMemo(
+    () => normalizeDefaults(defaultValues),
+    [defaultValues]
+  )
+  const baselineRef = useRef<NormalizedMonitoringValues>(normalizedDefaults)
+  const baselineSerializedRef = useRef<string>(
+    JSON.stringify(normalizedDefaults)
   )
 
   const formDefaults = useMemo(
@@ -213,7 +342,13 @@ export function MonitoringSettingsSection({
     defaultValues: formDefaults,
   })
 
-  useResetForm(form, formDefaults)
+  useEffect(() => {
+    const serialized = JSON.stringify(normalizedDefaults)
+    if (serialized === baselineSerializedRef.current) return
+    baselineRef.current = normalizedDefaults
+    baselineSerializedRef.current = serialized
+    form.reset(buildFormDefaults(defaultValues))
+  }, [defaultValues, form, normalizedDefaults])
 
   const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
   const autoRetryStatusCodes = form.watch('AutomaticRetryStatusCodes')
@@ -246,6 +381,7 @@ export function MonitoringSettingsSection({
     }
 
     baselineRef.current = normalized
+    baselineSerializedRef.current = JSON.stringify(normalized)
   }
 
   return (
@@ -481,6 +617,32 @@ export function MonitoringSettingsSection({
               )}
             />
           </div>
+
+          <FormField
+            control={form.control}
+            name='operation_setting.param_preflight_interception_rules'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Param preflight interception rules')}</FormLabel>
+                <FormControl>
+                  <Textarea
+                    rows={10}
+                    placeholder={t(
+                      'Leave empty to disable. JSON rules are validated on save.'
+                    )}
+                    {...field}
+                    onChange={(event) => field.onChange(event.target.value)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Applied globally before upstream relay. Match by model, path, and channel group, then evaluate request body conditions.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </SettingsForm>
       </Form>
     </SettingsSection>

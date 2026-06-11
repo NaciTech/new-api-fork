@@ -651,6 +651,39 @@ export function DetailsDialog(props: DetailsDialogProps) {
             </DetailSection>
           )}
 
+          {/* Param preflight intercept (type=51) */}
+          {other?.preflight_intercepted && (
+            <DetailSection
+              icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
+              label={t('Param Intercept')}
+              variant='danger'
+            >
+              {other.preflight_group && (
+                <DetailRow
+                  label={t('Rule Group')}
+                  value={other.preflight_group}
+                />
+              )}
+              {other.preflight_rule && (
+                <DetailRow label={t('Rule')} value={other.preflight_rule} />
+              )}
+              {other.status_code != null && (
+                <DetailRow
+                  label={t('Status Code')}
+                  value={String(other.status_code)}
+                  mono
+                />
+              )}
+              {other.error_code && (
+                <DetailRow
+                  label={t('Error Code')}
+                  value={other.error_code}
+                  mono
+                />
+              )}
+            </DetailSection>
+          )}
+
           {/* Reject reason (admin only) */}
           {props.isAdmin && other?.reject_reason && (
             <DetailSection

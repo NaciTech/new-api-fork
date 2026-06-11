@@ -44,6 +44,7 @@ export default function SettingsMonitoring(props) {
       '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
     'monitor_setting.auto_test_channel_enabled': false,
     'monitor_setting.auto_test_channel_minutes': 10,
+    'operation_setting.param_preflight_interception_rules': '',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -53,6 +54,61 @@ export default function SettingsMonitoring(props) {
   const parsedAutoRetryStatusCodes = parseHttpStatusCodeRules(
     inputs.AutomaticRetryStatusCodes || '',
   );
+
+  const validateParamPreflightRulesJson = () => {
+    const raw = inputs['operation_setting.param_preflight_interception_rules'];
+    if (!raw || !String(raw).trim()) {
+      return { ok: true };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+        return { ok: false, message: t('参数前置拦截规则必须是对象格式') };
+      }
+      if (
+        parsed.default_status_code !== undefined &&
+        (!Number.isInteger(parsed.default_status_code) ||
+          parsed.default_status_code < 400 ||
+          parsed.default_status_code > 599)
+      ) {
+        return {
+          ok: false,
+          message: t('default_status_code 必须是 400-599 之间的整数'),
+        };
+      }
+      if (parsed.groups !== undefined && !Array.isArray(parsed.groups)) {
+        return { ok: false, message: t('groups 必须是数组') };
+      }
+      for (const group of parsed.groups || []) {
+        if (!group || Array.isArray(group) || typeof group !== 'object') {
+          return { ok: false, message: t('groups 中每一项都必须是对象') };
+        }
+        if (group.rules !== undefined && !Array.isArray(group.rules)) {
+          return { ok: false, message: t('rules 必须是数组') };
+        }
+        for (const rule of group.rules || []) {
+          if (!rule || Array.isArray(rule) || typeof rule !== 'object') {
+            return { ok: false, message: t('rules 中每一项都必须是对象') };
+          }
+          if (typeof rule.message !== 'string' || !rule.message.trim()) {
+            return {
+              ok: false,
+              message: t('每条参数拦截规则必须包含 message'),
+            };
+          }
+          if (!Array.isArray(rule.conditions) || rule.conditions.length === 0) {
+            return {
+              ok: false,
+              message: t('每条参数拦截规则必须包含非空 conditions'),
+            };
+          }
+        }
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: t('参数前置拦截规则 JSON 格式不正确') };
+    }
+  };
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
@@ -73,6 +129,10 @@ export default function SettingsMonitoring(props) {
           : '';
       return showError(`${t('自动重试状态码格式不正确')}${details}`);
     }
+    const paramPreflightValidation = validateParamPreflightRulesJson();
+    if (!paramPreflightValidation.ok) {
+      return showError(paramPreflightValidation.message);
+    }
     const requestQueue = updateArray.map((item) => {
       let value = '';
       if (typeof inputs[item.key] === 'boolean') {
@@ -81,6 +141,10 @@ export default function SettingsMonitoring(props) {
         const normalizedMap = {
           AutomaticDisableStatusCodes: parsedAutoDisableStatusCodes.normalized,
           AutomaticRetryStatusCodes: parsedAutoRetryStatusCodes.normalized,
+          'operation_setting.param_preflight_interception_rules': String(
+            inputs['operation_setting.param_preflight_interception_rules'] ??
+              '',
+          ).trim(),
         };
         value = normalizedMap[item.key] ?? inputs[item.key];
       }
@@ -273,6 +337,22 @@ export default function SettingsMonitoring(props) {
                   autosize={{ minRows: 6, maxRows: 12 }}
                   onChange={(value) =>
                     setInputs({ ...inputs, AutomaticDisableKeywords: value })
+                  }
+                />
+                <Form.TextArea
+                  label={t('参数前置拦截规则 JSON')}
+                  placeholder={t('留空表示不启用，示例和参数说明见标题旁提示')}
+                  extraText={t(
+                    '全局生效。先按模型、路径、渠道分组匹配，再检查组内参数条件',
+                  )}
+                  field={'operation_setting.param_preflight_interception_rules'}
+                  autosize={{ minRows: 10, maxRows: 25 }}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      'operation_setting.param_preflight_interception_rules':
+                        value,
+                    })
                   }
                 />
               </Col>

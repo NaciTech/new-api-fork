@@ -281,6 +281,7 @@ export type OperationsSettings = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   AutomaticRetryStatusCodes: string
+  'operation_setting.param_preflight_interception_rules': string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   SMTPServer: string
