@@ -1,12 +1,12 @@
 package operation_setting
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -37,7 +37,7 @@ type ParamPreflightGroup struct {
 type ParamPreflightRule struct {
 	Name       string                    `json:"name,omitempty"`
 	StatusCode int                       `json:"status_code,omitempty"`
-	Message    string                    `json:"message,omitempty"`
+	Message    interface{}               `json:"message,omitempty"`
 	Conditions []ParamPreflightCondition `json:"conditions,omitempty"`
 	Logic      string                    `json:"logic,omitempty"`
 }
@@ -88,7 +88,7 @@ func ParseParamPreflightInterceptionRules(raw string) (*ParamPreflightConfig, st
 		return &ParamPreflightConfig{DefaultStatusCode: http.StatusBadRequest}, "", nil
 	}
 	var cfg ParamPreflightConfig
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+	if err := common.Unmarshal([]byte(raw), &cfg); err != nil {
 		return nil, "", fmt.Errorf("参数前置拦截规则必须是合法 JSON: %w", err)
 	}
 	if cfg.DefaultStatusCode == 0 {
@@ -111,7 +111,7 @@ func ParseParamPreflightInterceptionRules(raw string) (*ParamPreflightConfig, st
 			if rule.StatusCode != 0 && !validPreflightStatusCode(rule.StatusCode) {
 				return nil, "", fmt.Errorf("groups[%d].rules[%d].status_code 必须是 400-599 之间的整数", groupIndex, ruleIndex)
 			}
-			if strings.TrimSpace(rule.Message) == "" {
+			if !validParamPreflightMessage(rule.Message) {
 				return nil, "", fmt.Errorf("groups[%d].rules[%d].message 不能为空", groupIndex, ruleIndex)
 			}
 			if len(rule.Conditions) == 0 {
@@ -131,7 +131,7 @@ func ParseParamPreflightInterceptionRules(raw string) (*ParamPreflightConfig, st
 			}
 		}
 	}
-	bytes, err := json.Marshal(cfg)
+	bytes, err := common.Marshal(cfg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -160,7 +160,7 @@ func EvaluateParamPreflight(body []byte, ctx map[string]interface{}, candidateGr
 	if !gjson.ValidBytes(body) {
 		return nil, nil
 	}
-	contextJSON, err := json.Marshal(ctx)
+	contextJSON, err := common.Marshal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func EvaluateParamPreflight(body []byte, ctx map[string]interface{}, candidateGr
 		}
 		group := cfg.Groups[groupIndex]
 		for _, rule := range group.Rules {
-			matched, err := matchParamPreflightRule(jsonStr, contextStr, rule)
+			matched, messageIndex, err := matchParamPreflightRule(jsonStr, contextStr, rule)
 			if err != nil {
 				return nil, err
 			}
@@ -190,7 +190,7 @@ func EvaluateParamPreflight(body []byte, ctx map[string]interface{}, candidateGr
 				Group:      group.Name,
 				Rule:       rule.Name,
 				StatusCode: statusCode,
-				Message:    strings.TrimSpace(rule.Message),
+				Message:    resolveParamPreflightMessage(rule.Message, messageIndex),
 			}, nil
 		}
 	}
@@ -238,38 +238,51 @@ func matchParamPreflightGroup(group ParamPreflightGroup, ctx map[string]interfac
 	return true
 }
 
-func matchParamPreflightRule(jsonStr string, contextJSON string, rule ParamPreflightRule) (bool, error) {
+func matchParamPreflightRule(jsonStr string, contextJSON string, rule ParamPreflightRule) (bool, int, error) {
 	logic := strings.ToUpper(strings.TrimSpace(rule.Logic))
 	if logic == "" {
 		logic = "AND"
 	}
 	if logic == "OR" {
 		for _, condition := range rule.Conditions {
-			ok, err := matchParamPreflightCondition(jsonStr, contextJSON, condition)
+			ok, messageIndex, err := matchParamPreflightCondition(jsonStr, contextJSON, condition)
 			if err != nil {
-				return false, err
+				return false, -1, err
 			}
 			if ok {
-				return true, nil
+				return true, messageIndex, nil
 			}
 		}
-		return false, nil
+		return false, -1, nil
 	}
+	messageIndex := -1
 	for _, condition := range rule.Conditions {
-		ok, err := matchParamPreflightCondition(jsonStr, contextJSON, condition)
+		ok, conditionMessageIndex, err := matchParamPreflightCondition(jsonStr, contextJSON, condition)
 		if err != nil {
-			return false, err
+			return false, -1, err
 		}
 		if !ok {
-			return false, nil
+			return false, -1, nil
+		}
+		if conditionMessageIndex >= 0 {
+			messageIndex = conditionMessageIndex
 		}
 	}
-	return true, nil
+	return true, messageIndex, nil
 }
 
-func matchParamPreflightCondition(jsonStr string, contextJSON string, condition ParamPreflightCondition) (bool, error) {
+func matchParamPreflightCondition(jsonStr string, contextJSON string, condition ParamPreflightCondition) (bool, int, error) {
 	path := strings.TrimSpace(condition.Path)
 	mode := strings.ToLower(strings.TrimSpace(condition.Mode))
+	if mode == "claude_tool_pair_invalid" {
+		messageIndex := invalidClaudeToolPairMessageIndex(gjson.Get(jsonStr, path))
+		result := messageIndex >= 0
+		if condition.Invert {
+			result = !result
+			messageIndex = -1
+		}
+		return result, messageIndex, nil
+	}
 	value := gjson.Get(jsonStr, path)
 	if !value.Exists() && contextJSON != "" {
 		value = gjson.Get(contextJSON, path)
@@ -289,7 +302,7 @@ func matchParamPreflightCondition(jsonStr string, contextJSON string, condition 
 		}
 		target, err := getParamPreflightTargetValue(jsonStr, contextJSON, condition)
 		if err != nil {
-			return false, err
+			return false, -1, err
 		}
 		if !target.Exists() {
 			result = false
@@ -300,7 +313,7 @@ func matchParamPreflightCondition(jsonStr string, contextJSON string, condition 
 	if condition.Invert {
 		result = !result
 	}
-	return result, nil
+	return result, -1, nil
 }
 
 func getParamPreflightTargetValue(jsonStr string, contextJSON string, condition ParamPreflightCondition) (gjson.Result, error) {
@@ -312,7 +325,7 @@ func getParamPreflightTargetValue(jsonStr string, contextJSON string, condition 
 		}
 		return target, nil
 	}
-	targetBytes, err := json.Marshal(condition.Value)
+	targetBytes, err := common.Marshal(condition.Value)
 	if err != nil {
 		return gjson.Result{}, err
 	}
@@ -371,10 +384,10 @@ func validateMatchMode(mode string, field string) error {
 
 func validateConditionMode(mode string) error {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "full", "prefix", "suffix", "contains", "gt", "gte", "lt", "lte", "exists", "missing", "trim_empty":
+	case "full", "prefix", "suffix", "contains", "gt", "gte", "lt", "lte", "exists", "missing", "trim_empty", "claude_tool_pair_invalid":
 		return nil
 	default:
-		return fmt.Errorf("mode 仅支持 full、prefix、suffix、contains、gt、gte、lt、lte、exists、missing、trim_empty")
+		return fmt.Errorf("mode 仅支持 full、prefix、suffix、contains、gt、gte、lt、lte、exists、missing、trim_empty、claude_tool_pair_invalid")
 	}
 }
 
@@ -455,4 +468,169 @@ func getContextInt(ctx map[string]interface{}, key string) int {
 	default:
 		return 0
 	}
+}
+
+type claudeToolMessageGroup struct {
+	role    string
+	content []gjson.Result
+}
+
+const (
+	claudeToolPairMessageMissingResult = iota
+	claudeToolPairMessageUnexpectedResult
+	claudeToolPairMessageResultNotFirst
+	claudeToolPairMessageIncompleteResults
+	claudeToolPairMessageEmptyToolUseID
+	claudeToolPairMessageEmptyToolResultID
+	claudeToolPairMessageDuplicateToolUseID
+	claudeToolPairMessageDuplicateToolResultID
+)
+
+func invalidClaudeToolPairMessageIndex(messages gjson.Result) int {
+	if !messages.Exists() || !messages.IsArray() {
+		return -1
+	}
+
+	groups := make([]claudeToolMessageGroup, 0)
+	for _, message := range messages.Array() {
+		role := message.Get("role").String()
+		if role == "" {
+			continue
+		}
+		content := claudeContentBlocks(message.Get("content"))
+		if len(groups) > 0 && groups[len(groups)-1].role == role {
+			groups[len(groups)-1].content = append(groups[len(groups)-1].content, content...)
+			continue
+		}
+		groups = append(groups, claudeToolMessageGroup{role: role, content: content})
+	}
+
+	for i, group := range groups {
+		if group.role != "assistant" {
+			continue
+		}
+		toolUseIDs, invalidIndex := collectClaudeToolUseIDs(group.content)
+		if invalidIndex >= 0 {
+			return invalidIndex
+		}
+		if len(toolUseIDs) == 0 {
+			continue
+		}
+		if i+1 >= len(groups) || groups[i+1].role != "user" {
+			return claudeToolPairMessageMissingResult
+		}
+		toolResultIDs, invalidIndex := collectLeadingClaudeToolResultIDs(groups[i+1].content)
+		if invalidIndex >= 0 {
+			return invalidIndex
+		}
+		if len(toolResultIDs) < len(toolUseIDs) {
+			return claudeToolPairMessageIncompleteResults
+		}
+		if !sameStringSet(toolUseIDs, toolResultIDs) {
+			return claudeToolPairMessageUnexpectedResult
+		}
+	}
+	return -1
+}
+
+func claudeContentBlocks(content gjson.Result) []gjson.Result {
+	if content.IsArray() {
+		return content.Array()
+	}
+	if content.Exists() {
+		return []gjson.Result{content}
+	}
+	return nil
+}
+
+func collectClaudeToolUseIDs(content []gjson.Result) (map[string]struct{}, int) {
+	ids := make(map[string]struct{})
+	for _, block := range content {
+		if block.Get("type").String() != "tool_use" {
+			continue
+		}
+		id := strings.TrimSpace(block.Get("id").String())
+		if id == "" {
+			return nil, claudeToolPairMessageEmptyToolUseID
+		}
+		if _, exists := ids[id]; exists {
+			return nil, claudeToolPairMessageDuplicateToolUseID
+		}
+		ids[id] = struct{}{}
+	}
+	return ids, -1
+}
+
+func collectLeadingClaudeToolResultIDs(content []gjson.Result) (map[string]struct{}, int) {
+	ids := make(map[string]struct{})
+	seenNonToolResult := false
+	for _, block := range content {
+		if block.Get("type").String() != "tool_result" {
+			seenNonToolResult = true
+			continue
+		}
+		if seenNonToolResult {
+			return nil, claudeToolPairMessageResultNotFirst
+		}
+		id := strings.TrimSpace(block.Get("tool_use_id").String())
+		if id == "" {
+			return nil, claudeToolPairMessageEmptyToolResultID
+		}
+		if _, exists := ids[id]; exists {
+			return nil, claudeToolPairMessageDuplicateToolResultID
+		}
+		ids[id] = struct{}{}
+	}
+	return ids, -1
+}
+
+func validParamPreflightMessage(message interface{}) bool {
+	switch value := message.(type) {
+	case string:
+		return strings.TrimSpace(value) != ""
+	case []interface{}:
+		if len(value) == 0 {
+			return false
+		}
+		for _, item := range value {
+			text, ok := item.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveParamPreflightMessage(message interface{}, index int) string {
+	switch value := message.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []interface{}:
+		if index >= 0 && index < len(value) {
+			if text, ok := value[index].(string); ok && strings.TrimSpace(text) != "" {
+				return strings.TrimSpace(text)
+			}
+		}
+		if len(value) > 0 {
+			if text, ok := value[0].(string); ok {
+				return strings.TrimSpace(text)
+			}
+		}
+	}
+	return "request was rejected by parameter preflight validation"
+}
+
+func sameStringSet(left map[string]struct{}, right map[string]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for value := range left {
+		if _, exists := right[value]; !exists {
+			return false
+		}
+	}
+	return true
 }

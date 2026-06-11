@@ -111,14 +111,18 @@ function validateParamPreflightRulesJson(raw: string) {
           }
         }
         const ruleConfig = rule as { message?: unknown; conditions?: unknown }
-        if (
-          typeof ruleConfig.message !== 'string' ||
-          !ruleConfig.message.trim()
-        ) {
+        const validMessage =
+          (typeof ruleConfig.message === 'string' && ruleConfig.message.trim() !== '') ||
+          (Array.isArray(ruleConfig.message) &&
+            ruleConfig.message.length > 0 &&
+            ruleConfig.message.every(
+              (item) => typeof item === 'string' && item.trim() !== ''
+            ))
+        if (!validMessage) {
           return {
             ok: false as const,
             message: i18next.t(
-              'each param intercept rule must include message'
+              'each param intercept rule must include message as a string or a non-empty array of strings'
             ),
           }
         }
