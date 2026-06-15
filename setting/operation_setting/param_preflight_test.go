@@ -295,3 +295,47 @@ func TestParamPreflightClaudeToolPairInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestParamPreflightInAndNotIn(t *testing.T) {
+	raw := `{
+		"groups": [{
+			"name": "in-not-in-test",
+			"models": ["gpt-"],
+			"model_match": "prefix",
+			"rules": [
+				{
+					"name": "check-in",
+					"message": "model must be in whitelist",
+					"conditions": [{
+						"path": "model",
+						"mode": "not_in",
+						"value": ["gpt-4", "gpt-4o"]
+					}]
+				}
+			]
+		}]
+	}`
+	if err := UpdateParamPreflightInterceptionRules(raw); err != nil {
+		t.Fatalf("UpdateParamPreflightInterceptionRules() error = %v", err)
+	}
+	ctx := map[string]interface{}{"model": "gpt-4o-mini"}
+	candidates := GetParamPreflightCandidateGroups(ctx)
+	
+	// Should match because gpt-4o-mini is not in [gpt-4, gpt-4o]
+	result, err := EvaluateParamPreflight([]byte(`{"model":"gpt-4o-mini"}`), ctx, candidates)
+	if err != nil {
+		t.Fatalf("EvaluateParamPreflight() error = %v", err)
+	}
+	if result == nil || result.Rule != "check-in" {
+		t.Fatalf("result = %#v, want match check-in", result)
+	}
+
+	// Should not match because gpt-4o is in [gpt-4, gpt-4o]
+	result, err = EvaluateParamPreflight([]byte(`{"model":"gpt-4o"}`), ctx, candidates)
+	if err != nil {
+		t.Fatalf("EvaluateParamPreflight() error = %v", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %#v, want no match", result)
+	}
+}

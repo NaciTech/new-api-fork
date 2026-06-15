@@ -128,6 +128,9 @@ func ParseParamPreflightInterceptionRules(raw string) (*ParamPreflightConfig, st
 				if err := validateConditionMode(condition.Mode); err != nil {
 					return nil, "", fmt.Errorf("groups[%d].rules[%d].conditions[%d]: %w", groupIndex, ruleIndex, conditionIndex, err)
 				}
+				if err := validateConditionValue(condition); err != nil {
+					return nil, "", fmt.Errorf("groups[%d].rules[%d].conditions[%d]: %w", groupIndex, ruleIndex, conditionIndex, err)
+				}
 			}
 		}
 	}
@@ -284,19 +287,20 @@ func matchParamPreflightCondition(jsonStr string, contextJSON string, condition 
 		return result, messageIndex, nil
 	}
 	value := gjson.Get(jsonStr, path)
-	if !value.Exists() && contextJSON != "" {
+	if !isParamPreflightValuePresent(path, value) && contextJSON != "" {
 		value = gjson.Get(contextJSON, path)
 	}
+	valuePresent := isParamPreflightValuePresent(path, value)
 	var result bool
 	switch mode {
 	case "exists":
-		result = value.Exists()
+		result = valuePresent
 	case "missing":
-		result = !value.Exists()
+		result = !valuePresent
 	case "trim_empty":
-		result = value.Exists() && isTrimEmptyPreflightValue(value)
+		result = valuePresent && isTrimEmptyPreflightValue(value)
 	default:
-		if !value.Exists() {
+		if !valuePresent {
 			result = condition.PassMissingKey
 			break
 		}
@@ -307,6 +311,9 @@ func matchParamPreflightCondition(jsonStr string, contextJSON string, condition 
 		if !target.Exists() {
 			result = false
 			break
+		}
+		if (mode == "in" || mode == "not_in") && !target.IsArray() {
+			return false, -1, fmt.Errorf("mode 为 %s 时比较值必须是数组", mode)
 		}
 		result = comparePreflightValue(value, target, mode)
 	}
@@ -357,6 +364,21 @@ func comparePreflightValue(value gjson.Result, target gjson.Result, mode string)
 		return strings.HasSuffix(value.String(), target.String())
 	case "contains":
 		return strings.Contains(value.String(), target.String())
+	case "in", "not_in":
+		matched := false
+		if target.IsArray() {
+			target.ForEach(func(_, item gjson.Result) bool {
+				if comparePreflightValue(value, item, "full") {
+					matched = true
+					return false
+				}
+				return true
+			})
+		}
+		if mode == "not_in" {
+			return !matched
+		}
+		return matched
 	case "gt":
 		return value.Type == gjson.Number && target.Type == gjson.Number && value.Num > target.Num
 	case "gte":
@@ -384,10 +406,10 @@ func validateMatchMode(mode string, field string) error {
 
 func validateConditionMode(mode string) error {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "full", "prefix", "suffix", "contains", "gt", "gte", "lt", "lte", "exists", "missing", "trim_empty", "claude_tool_pair_invalid":
+	case "full", "prefix", "suffix", "contains", "in", "not_in", "gt", "gte", "lt", "lte", "exists", "missing", "trim_empty", "claude_tool_pair_invalid":
 		return nil
 	default:
-		return fmt.Errorf("mode 仅支持 full、prefix、suffix、contains、gt、gte、lt、lte、exists、missing、trim_empty、claude_tool_pair_invalid")
+		return fmt.Errorf("mode 仅支持 full、prefix、suffix、contains、in、not_in、gt、gte、lt、lte、exists、missing、trim_empty、claude_tool_pair_invalid")
 	}
 }
 
@@ -633,4 +655,42 @@ func sameStringSet(left map[string]struct{}, right map[string]struct{}) bool {
 		}
 	}
 	return true
+}
+
+func isParamPreflightValuePresent(path string, value gjson.Result) bool {
+	if !value.Exists() {
+		return false
+	}
+	if !strings.Contains(path, "#") || !value.IsArray() {
+		return true
+	}
+	present := false
+	value.ForEach(func(_, item gjson.Result) bool {
+		if item.IsArray() {
+			if isParamPreflightValuePresent("#", item) {
+				present = true
+				return false
+			}
+			return true
+		}
+		// Projection results preserve explicit null and empty-string values.
+		present = true
+		return false
+	})
+	return present
+}
+
+func validateConditionValue(condition ParamPreflightCondition) error {
+	mode := strings.ToLower(strings.TrimSpace(condition.Mode))
+	if mode != "in" && mode != "not_in" {
+		return nil
+	}
+	if strings.TrimSpace(condition.ValuePath) != "" {
+		return nil
+	}
+	values, ok := condition.Value.([]interface{})
+	if !ok || len(values) == 0 {
+		return fmt.Errorf("mode 为 %s 时 value 必须是非空数组，或设置 value_path", mode)
+	}
+	return nil
 }
