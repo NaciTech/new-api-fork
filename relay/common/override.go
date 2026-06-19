@@ -2100,6 +2100,14 @@ func BuildParamOverrideContext(info *RelayInfo) map[string]interface{} {
 		ctx["last_error_type"] = errorType
 	}
 
+	if info.TokenGroup != "" {
+		ctx["token_group"] = info.TokenGroup
+	}
+	if info.ChannelMeta != nil {
+		ctx["channel_type"] = info.ChannelMeta.ChannelType
+		ctx["channel_id"] = info.ChannelMeta.ChannelId
+	}
+
 	ctx["is_channel_test"] = info.IsChannelTest
 	return ctx
 }

@@ -27,6 +27,7 @@ type ParamPreflightGroup struct {
 	ModelMatch   string               `json:"model_match,omitempty"`
 	Paths        []string             `json:"paths,omitempty"`
 	PathMatch    string               `json:"path_match,omitempty"`
+	TokenGroups  []string             `json:"token_groups,omitempty"`
 	ChannelTypes []int                `json:"channel_types,omitempty"`
 	ChannelIds   []int                `json:"channel_ids,omitempty"`
 	ChannelTags  []string             `json:"channel_tags,omitempty"`
@@ -227,6 +228,9 @@ func matchParamPreflightGroup(group ParamPreflightGroup, ctx map[string]interfac
 		return false
 	}
 	if !matchStringList(getContextString(ctx, "request_path"), group.Paths, group.PathMatch) {
+		return false
+	}
+	if !matchStringList(getContextString(ctx, "token_group"), group.TokenGroups, "full") {
 		return false
 	}
 	if !matchIntList(getContextInt(ctx, "channel_type"), group.ChannelTypes) {
