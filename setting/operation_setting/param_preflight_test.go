@@ -281,6 +281,29 @@ func TestParamPreflightClaudeToolPairInvalid(t *testing.T) {
 			]}`,
 			wantMatch: false,
 		},
+		{
+			name: "user tool_result as the first message",
+			body: `{"messages":[
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}
+			]}`,
+			wantMatch: true,
+		},
+		{
+			name: "user tool_result without previous assistant tool_use",
+			body: `{"messages":[
+				{"role":"user","content":"hello"},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}
+			]}`,
+			wantMatch: true,
+		},
+		{
+			name: "user tool_result mismatched with previous assistant tool_use",
+			body: `{"messages":[
+				{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"read","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"ok"}]}
+			]}`,
+			wantMatch: true,
+		},
 	}
 
 	for _, tt := range tests {

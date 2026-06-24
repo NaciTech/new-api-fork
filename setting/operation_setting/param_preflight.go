@@ -532,28 +532,48 @@ func invalidClaudeToolPairMessageIndex(messages gjson.Result) int {
 	}
 
 	for i, group := range groups {
-		if group.role != "assistant" {
+		switch group.role {
+		case "user":
+			toolResultIDs, invalidIndex := collectLeadingClaudeToolResultIDs(group.content)
+			if invalidIndex >= 0 {
+				return invalidIndex
+			}
+			if len(toolResultIDs) == 0 {
+				continue
+			}
+			if i == 0 || groups[i-1].role != "assistant" {
+				return claudeToolPairMessageUnexpectedResult
+			}
+			previousToolUseIDs, invalidIndex := collectClaudeToolUseIDs(groups[i-1].content)
+			if invalidIndex >= 0 {
+				return invalidIndex
+			}
+			if !sameStringSet(previousToolUseIDs, toolResultIDs) {
+				return claudeToolPairMessageUnexpectedResult
+			}
+		case "assistant":
+			toolUseIDs, invalidIndex := collectClaudeToolUseIDs(group.content)
+			if invalidIndex >= 0 {
+				return invalidIndex
+			}
+			if len(toolUseIDs) == 0 {
+				continue
+			}
+			if i+1 >= len(groups) || groups[i+1].role != "user" {
+				return claudeToolPairMessageMissingResult
+			}
+			toolResultIDs, invalidIndex := collectLeadingClaudeToolResultIDs(groups[i+1].content)
+			if invalidIndex >= 0 {
+				return invalidIndex
+			}
+			if len(toolResultIDs) < len(toolUseIDs) {
+				return claudeToolPairMessageIncompleteResults
+			}
+			if !sameStringSet(toolUseIDs, toolResultIDs) {
+				return claudeToolPairMessageUnexpectedResult
+			}
+		default:
 			continue
-		}
-		toolUseIDs, invalidIndex := collectClaudeToolUseIDs(group.content)
-		if invalidIndex >= 0 {
-			return invalidIndex
-		}
-		if len(toolUseIDs) == 0 {
-			continue
-		}
-		if i+1 >= len(groups) || groups[i+1].role != "user" {
-			return claudeToolPairMessageMissingResult
-		}
-		toolResultIDs, invalidIndex := collectLeadingClaudeToolResultIDs(groups[i+1].content)
-		if invalidIndex >= 0 {
-			return invalidIndex
-		}
-		if len(toolResultIDs) < len(toolUseIDs) {
-			return claudeToolPairMessageIncompleteResults
-		}
-		if !sameStringSet(toolUseIDs, toolResultIDs) {
-			return claudeToolPairMessageUnexpectedResult
 		}
 	}
 	return -1
