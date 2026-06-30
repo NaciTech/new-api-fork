@@ -179,10 +179,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:                 c,
+		TokenGroup:          relayInfo.TokenGroup,
+		ModelName:           relayInfo.OriginModelName,
+		Retry:               common.GetPointer(0),
+		EnableMultiKeyRetry: true,
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -197,6 +198,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		addUsedChannelMultiKey(c, channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
@@ -260,6 +262,14 @@ func addUsedChannel(c *gin.Context, channelId int) {
 	c.Set("use_channel", useChannel)
 }
 
+func addUsedChannelMultiKey(c *gin.Context, channelId int) {
+	if !common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {
+		return
+	}
+	keyIndex := common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+	service.MarkUsedChannelMultiKey(c, channelId, keyIndex)
+}
+
 func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	if request == nil {
 		return &types.TokenCountMeta{}
@@ -291,17 +301,55 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
-		autoBan := c.GetBool("auto_ban")
-		autoBanInt := 1
-		if !autoBan {
-			autoBanInt = 0
+		if retryParam == nil || !retryParam.EnableMultiKeyRetry {
+			autoBan := c.GetBool("auto_ban")
+			autoBanInt := 1
+			if !autoBan {
+				autoBanInt = 0
+			}
+			return &model.Channel{
+				Id:      c.GetInt("channel_id"),
+				Type:    c.GetInt("channel_type"),
+				Name:    c.GetString("channel_name"),
+				AutoBan: &autoBanInt,
+			}, nil
 		}
-		return &model.Channel{
-			Id:      c.GetInt("channel_id"),
-			Type:    c.GetInt("channel_type"),
-			Name:    c.GetString("channel_name"),
-			AutoBan: &autoBanInt,
-		}, nil
+		contextChannelID := c.GetInt("channel_id")
+		if contextChannelID > 0 {
+			channelFromContext, err := model.CacheGetChannel(contextChannelID)
+			hasFullContextChannel := err == nil && channelFromContext != nil
+			if !hasFullContextChannel {
+				autoBan := c.GetBool("auto_ban")
+				autoBanInt := 1
+				if !autoBan {
+					autoBanInt = 0
+				}
+				channelFromContext = &model.Channel{
+					Id:      contextChannelID,
+					Type:    c.GetInt("channel_type"),
+					Name:    c.GetString("channel_name"),
+					AutoBan: &autoBanInt,
+				}
+			}
+			if !hasFullContextChannel || channelFromContext.Status == common.ChannelStatusEnabled {
+				shouldRefreshMultiKey := retryParam.GetRetry() > 0 && channelFromContext.Id == contextChannelID && channelFromContext.ChannelInfo.IsMultiKey
+				if shouldRefreshMultiKey {
+					if newAPIError := middleware.SetupContextForSelectedChannel(c, channelFromContext, info.OriginModelName); newAPIError != nil {
+						if newAPIError.GetErrorCode() == types.ErrorCodeChannelNoAvailableKey {
+							logger.LogInfo(c, fmt.Sprintf("channel #%d skipped on retry: no untried enabled keys", channelFromContext.Id))
+						} else {
+							return nil, newAPIError
+						}
+					} else {
+						return channelFromContext, nil
+					}
+				}
+				if !shouldRefreshMultiKey {
+					return channelFromContext, nil
+				}
+			}
+			logger.LogInfo(c, fmt.Sprintf("channel #%d skipped on retry: disabled", channelFromContext.Id))
+		}
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 

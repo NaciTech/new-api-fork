@@ -386,6 +386,13 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                       <div className='border-t pt-1 text-xs'>
                         <p className='font-medium'>{t('Channel Affinity')}</p>
                         <p>
+                          {t('Target')}:{' '}
+                          {affinity.configured_target &&
+                          affinity.configured_target !== affinity.target
+                            ? `${affinity.configured_target} → ${affinity.target || '-'}`
+                            : affinity.target || '-'}
+                        </p>
+                        <p>
                           {t('Rule')}: {affinity.rule_name || '-'}
                         </p>
                         <p>
@@ -396,6 +403,30 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                               '-'
                             : '••••'}
                         </p>
+                        {affinity.key_affinity_status && (
+                          <p>
+                            {t('Key Affinity Status')}:{' '}
+                            {affinity.key_affinity_status}
+                          </p>
+                        )}
+                        {affinity.preferred_multi_key_index != null && (
+                          <p>
+                            {t('Preferred Key')}:{' '}
+                            {affinity.preferred_multi_key_index}
+                          </p>
+                        )}
+                        {affinity.selected_multi_key_index != null && (
+                          <p>
+                            {t('Selected Key')}:{' '}
+                            {affinity.selected_multi_key_index}
+                          </p>
+                        )}
+                        {affinity.fallback_reason && (
+                          <p>
+                            {t('Fallback Reason')}:{' '}
+                            {affinity.fallback_reason}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

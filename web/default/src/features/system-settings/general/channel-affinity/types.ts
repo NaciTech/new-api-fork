@@ -17,18 +17,36 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export interface KeySource {
-  type: 'context_int' | 'context_string' | 'request_header' | 'gjson'
+  type: 'context_int' | 'context_string' | 'request_header' | 'header' | 'gjson'
   key?: string
   path?: string
+}
+
+export interface AffinityMappingTarget {
+  type: 'gjson' | 'header'
+  key?: string
+  path?: string
+  overwrite?: boolean
+}
+
+export interface AffinityMapping {
+  enabled: boolean
+  targets?: AffinityMappingTarget[]
+  type?: 'gjson' | 'header'
+  key?: string
+  path?: string
+  overwrite?: boolean
 }
 
 export interface AffinityRule {
   id?: number
   name: string
+  target?: 'channel' | 'multi_key'
   model_regex: string[]
   path_regex: string[]
   user_agent_include?: string[]
   key_sources: KeySource[]
+  mapping?: AffinityMapping
   value_regex?: string
   ttl_seconds: number
   skip_retry_on_failure: boolean

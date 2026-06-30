@@ -72,6 +72,7 @@ const KEY_SOURCE_TYPES = [
   { label: 'context_int', value: 'context_int' },
   { label: 'context_string', value: 'context_string' },
   { label: 'request_header', value: 'request_header' },
+  { label: 'header', value: 'header' },
   { label: 'gjson', value: 'gjson' },
 ];
 
@@ -90,6 +91,7 @@ const CONTEXT_KEY_PRESETS = [
 const RULES_JSON_PLACEHOLDER = `[
   {
     "name": "prefer-by-conversation-id",
+    "target": "multi_key",
     "model_regex": ["^gpt-.*$"],
     "path_regex": ["/v1/chat/completions"],
     "user_agent_include": ["curl", "PostmanRuntime"],
@@ -97,6 +99,12 @@ const RULES_JSON_PLACEHOLDER = `[
       { "type": "gjson", "path": "metadata.conversation_id" },
       { "type": "context_string", "key": "conversation_id" }
     ],
+    "mapping": {
+      "enabled": true,
+      "targets": [
+        { "type": "gjson", "path": "metadata.conversation_id" }
+      ]
+    },
     "value_regex": "^[-0-9A-Za-z._:]{1,128}$",
     "ttl_seconds": 600,
     "param_override_template": {
@@ -205,12 +213,15 @@ const buildChannelAffinityRulePayload = ({
   keySources,
   userAgentInclude,
   paramOverrideTemplate,
+  mapping,
 }) => ({
   id: isEdit ? editingRuleId : rulesLength,
   name: (values?.name || '').trim(),
+  target: values?.target === 'multi_key' ? 'multi_key' : 'channel',
   model_regex: modelRegex,
   path_regex: pathRegex,
   key_sources: keySources,
+  ...(mapping ? { mapping } : {}),
   value_regex: (values?.value_regex || '').trim(),
   ttl_seconds: Number(values?.ttl_seconds || 0),
   include_using_group: !!values?.include_using_group,
@@ -274,6 +285,7 @@ export default function SettingsChannelAffinity(props) {
     const r = rule || {};
     return {
       name: r.name || '',
+      target: r.target === 'multi_key' ? 'multi_key' : 'channel',
       model_regex_text: (r.model_regex || []).join('\n'),
       path_regex_text: (r.path_regex || []).join('\n'),
       user_agent_include_text: (r.user_agent_include || []).join('\n'),
@@ -286,6 +298,7 @@ export default function SettingsChannelAffinity(props) {
       param_override_template_json: r.param_override_template
         ? stringifyPretty(r.param_override_template)
         : '',
+      mapping_json: r.mapping ? stringifyPretty(r.mapping) : '',
     };
   };
 
@@ -552,6 +565,15 @@ export default function SettingsChannelAffinity(props) {
           : '-',
     },
     {
+      title: t('目标'),
+      dataIndex: 'target',
+      render: (value) => (
+        <Tag color={value === 'multi_key' ? 'green' : 'blue'} shape='circle'>
+          {value === 'multi_key' ? t('Multi-key') : t('渠道')}
+        </Tag>
+      ),
+    },
+    {
       title: t('Key 来源'),
       dataIndex: 'key_sources',
       render: (list) => {
@@ -567,6 +589,18 @@ export default function SettingsChannelAffinity(props) {
           );
         });
       },
+    },
+    {
+      title: t('映射'),
+      dataIndex: 'mapping',
+      render: (value) =>
+        value ? (
+          <Tag color='violet' shape='circle'>
+            {t('已设置')}
+          </Tag>
+        ) : (
+          <Text type='tertiary'>-</Text>
+        ),
     },
     {
       title: t('TTL（秒）'),
@@ -666,7 +700,8 @@ export default function SettingsChannelAffinity(props) {
       if (
         x.type === 'context_int' ||
         x.type === 'context_string' ||
-        x.type === 'request_header'
+        x.type === 'request_header' ||
+        x.type === 'header'
       ) {
         if (!x.key) return { ok: false, message: 'Key 不能为空' };
       } else if (x.type === 'gjson') {
@@ -681,6 +716,7 @@ export default function SettingsChannelAffinity(props) {
   const openAddModal = () => {
     const nextRule = {
       name: '',
+      target: 'channel',
       model_regex: [],
       path_regex: [],
       user_agent_include: [],
@@ -751,6 +787,13 @@ export default function SettingsChannelAffinity(props) {
       if (!paramTemplateValidation.ok) {
         return showError(t(paramTemplateValidation.message));
       }
+      const mappingValidation = parseOptionalObjectJson(
+        values.mapping_json,
+        '亲和映射',
+      );
+      if (!mappingValidation.ok) {
+        return showError(t(mappingValidation.message));
+      }
 
       const rulePayload = buildChannelAffinityRulePayload({
         values,
@@ -762,6 +805,7 @@ export default function SettingsChannelAffinity(props) {
         keySources: keySourcesValidation.value,
         userAgentInclude,
         paramOverrideTemplate: paramTemplateValidation.value,
+        mapping: mappingValidation.value,
       });
 
       if (!rulePayload.name) return showError(t('名称不能为空'));
@@ -1132,6 +1176,25 @@ export default function SettingsChannelAffinity(props) {
             }
           />
 
+          <Form.Select
+            field='target'
+            label={t('亲和目标')}
+            optionList={[
+              { label: t('渠道'), value: 'channel' },
+              { label: t('Multi-key'), value: 'multi_key' },
+            ]}
+            extraText={t(
+              '选择 channel 时按渠道保持亲和；选择 multi_key 时在同一渠道内优先复用成功的 Key。',
+            )}
+            style={{ width: 220 }}
+            onChange={(value) =>
+              setEditingRule((prev) => ({
+                ...(prev || {}),
+                target: value === 'multi_key' ? 'multi_key' : 'channel',
+              }))
+            }
+          />
+
           <Row gutter={16}>
             <Col xs={24} sm={12}>
               <Form.TextArea
@@ -1229,6 +1292,21 @@ export default function SettingsChannelAffinity(props) {
                         {t(' 秒。')}
                       </Text>
                     }
+                  />
+                </Col>
+              </Row>
+
+              <Row gutter={16}>
+                <Col xs={24}>
+                  <Form.TextArea
+                    field='mapping_json'
+                    label={t('亲和映射（JSON）')}
+                    extraText={t(
+                      '可选。命中亲和后，将亲和 Key 写回上游请求 JSON 字段或请求头，用于保持上游侧缓存/会话一致。',
+                    )}
+                    placeholder='{"enabled":true,"targets":[{"type":"gjson","path":"prompt_cache_key"},{"type":"header","key":"X-Trace-Key"}]}'
+                    autosize={{ minRows: 4, maxRows: 10 }}
+                    style={{ fontFamily: 'monospace', fontSize: 12 }}
                   />
                 </Col>
               </Row>
@@ -1346,7 +1424,7 @@ export default function SettingsChannelAffinity(props) {
           </Space>
           <Text type='tertiary' size='small'>
             {t(
-              'context_int/context_string 从请求上下文读取；request_header 从用户请求头读取；gjson 从入口请求的 JSON body 按 gjson path 读取。',
+              'context_int/context_string 从请求上下文读取；request_header/header 从用户请求头读取；gjson 从入口请求的 JSON body 按 gjson path 读取。',
             )}
           </Text>
           <div style={{ marginTop: 8, marginBottom: 8 }}>

@@ -557,6 +557,21 @@ export function ChannelAffinitySection(props: Props) {
                 cell: (rule) => <RuleBadgeList items={rule.model_regex || []} />,
               },
               {
+                id: 'target',
+                header: t('Target'),
+                cell: (rule) => (
+                  <StatusBadge
+                    label={
+                      rule.target === 'multi_key' ? t('Multi-key') : t('Channel')
+                    }
+                    variant={
+                      rule.target === 'multi_key' ? 'success' : 'neutral'
+                    }
+                    copyable={false}
+                  />
+                ),
+              },
+              {
                 id: 'key-sources',
                 header: t('Key Sources'),
                 cell: (rule) => (

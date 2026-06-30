@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -12,11 +13,47 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	Retry        *int
-	resetNextTry bool
+	Ctx                 *gin.Context
+	TokenGroup          string
+	ModelName           string
+	Retry               *int
+	EnableMultiKeyRetry bool
+	resetNextTry        bool
+}
+
+const ginKeyUsedChannelMultiKeys = "used_channel_multi_keys"
+
+func MarkUsedChannelMultiKey(c *gin.Context, channelID int, keyIndex int) {
+	if c == nil || channelID <= 0 || keyIndex < 0 {
+		return
+	}
+	used, _ := c.Get(ginKeyUsedChannelMultiKeys)
+	usedKeys, _ := used.(map[int]map[int]bool)
+	if usedKeys == nil {
+		usedKeys = make(map[int]map[int]bool)
+	}
+	channelKeys := usedKeys[channelID]
+	if channelKeys == nil {
+		channelKeys = make(map[int]bool)
+		usedKeys[channelID] = channelKeys
+	}
+	channelKeys[keyIndex] = true
+	c.Set(ginKeyUsedChannelMultiKeys, usedKeys)
+}
+
+func GetUsedChannelMultiKeyIndices(c *gin.Context, channelID int) map[int]bool {
+	if c == nil || channelID <= 0 {
+		return nil
+	}
+	used, ok := c.Get(ginKeyUsedChannelMultiKeys)
+	if !ok {
+		return nil
+	}
+	usedKeys, ok := used.(map[int]map[int]bool)
+	if !ok {
+		return nil
+	}
+	return usedKeys[channelID]
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -43,6 +80,23 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+func (p *RetryParam) GetChannelAvailabilityFilter() func(*model.Channel) bool {
+	if p == nil || !p.EnableMultiKeyRetry {
+		return nil
+	}
+	return func(channel *model.Channel) bool {
+		if channel == nil || channel.Id <= 0 {
+			return false
+		}
+		usedKeyIndices := GetUsedChannelMultiKeyIndices(p.Ctx, channel.Id)
+		if !channel.HasEnabledKeyExcluding(usedKeyIndices) {
+			logger.LogInfo(p.Ctx, fmt.Sprintf("channel #%d skipped: no enabled keys", channel.Id))
+			return false
+		}
+		return true
+	}
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -115,7 +169,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			channel, _ = model.GetRandomSatisfiedChannelFiltered(autoGroup, param.ModelName, priorityRetry, param.GetChannelAvailabilityFilter())
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -153,7 +207,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		channel, err = model.GetRandomSatisfiedChannelFiltered(param.TokenGroup, param.ModelName, param.GetRetry(), param.GetChannelAvailabilityFilter())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

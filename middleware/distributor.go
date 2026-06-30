@@ -101,10 +101,11 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+				affinityHit := false
+				if preferredAffinity, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					affinityUsable := false
-					preferred, err := model.CacheGetChannel(preferredChannelID)
-					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled {
+					preferred, err := model.CacheGetChannel(preferredAffinity.ChannelID)
+					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled && preferred.HasEnabledKey() {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -114,7 +115,8 @@ func Distribute() func(c *gin.Context) {
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
 									channel = preferred
 									affinityUsable = true
-									service.MarkChannelAffinityUsed(c, g, preferred.Id)
+									affinityHit = true
+									service.MarkChannelAffinitySelected(c, g, preferred.Id, true)
 									break
 								}
 							}
@@ -122,7 +124,8 @@ func Distribute() func(c *gin.Context) {
 							channel = preferred
 							selectGroup = usingGroup
 							affinityUsable = true
-							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
+							affinityHit = true
+							service.MarkChannelAffinitySelected(c, usingGroup, preferred.Id, true)
 						}
 					}
 					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
@@ -156,10 +159,16 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 				}
+				if channel != nil && !affinityHit {
+					service.MarkChannelAffinitySelected(c, selectGroup, channel.Id, false)
+				}
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		if newAPIError := SetupContextForSelectedChannel(c, channel, modelRequest.Model); newAPIError != nil {
+			abortWithOpenAiMessage(c, newAPIError.StatusCode, newAPIError.Error(), newAPIError.GetErrorCode())
+			return
+		}
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
@@ -449,9 +458,53 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
-	if newAPIError != nil {
-		return newAPIError
+	var key string
+	var index int
+	var newAPIError *types.NewAPIError
+	if channel.ChannelInfo.IsMultiKey {
+		usedKeyIndices := service.GetUsedChannelMultiKeyIndices(c, channel.Id)
+		if preferred, ok := service.GetChannelAffinityPreferredMultiKey(c); ok {
+			reason := ""
+			if usedKeyIndices[preferred.Index] {
+				reason = "preferred_key_already_used"
+			} else {
+				preferredKey, preferredIndex, preferredReason, valid := channel.GetEnabledKeyByIndex(preferred.Index)
+				reason = preferredReason
+				if valid {
+					selectedKeyFingerprint := service.ChannelAffinityFingerprint(preferredKey)
+					if preferred.KeyFingerprint == "" || preferred.KeyFingerprint == selectedKeyFingerprint {
+						key = preferredKey
+						index = preferredIndex
+						service.MarkChannelAffinitySelectedMultiKey(c, index, selectedKeyFingerprint, "hit", "")
+					} else {
+						reason = "preferred_key_fingerprint_mismatch"
+					}
+				}
+			}
+			if key == "" {
+				key, index, newAPIError = channel.GetNextEnabledKeyExcluding(usedKeyIndices)
+				if newAPIError != nil {
+					return newAPIError
+				}
+				service.MarkChannelAffinitySelectedMultiKey(c, index, service.ChannelAffinityFingerprint(key), "fallback_migrated", reason)
+			}
+		} else {
+			key, index, newAPIError = channel.GetNextEnabledKeyExcluding(usedKeyIndices)
+			if newAPIError != nil {
+				return newAPIError
+			}
+			if service.IsChannelAffinityMultiKeyTarget(c) {
+				service.MarkChannelAffinitySelectedMultiKey(c, index, service.ChannelAffinityFingerprint(key), "miss_recorded", "")
+			}
+		}
+	} else {
+		key, index, newAPIError = channel.GetNextEnabledKey()
+		if newAPIError != nil {
+			return newAPIError
+		}
+		if service.IsChannelAffinityMultiKeyTarget(c) {
+			service.MarkChannelAffinitySelectedMultiKey(c, -1, "", "downgraded_to_channel", "not_multi_key")
+		}
 	}
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)

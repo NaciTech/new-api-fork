@@ -104,6 +104,10 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int) (*Channel, error) {
+	return GetChannelFiltered(group, model, retry, nil)
+}
+
+func GetChannelFiltered(group string, model string, retry int, filter func(*Channel) bool) (*Channel, error) {
 	var abilities []Ability
 
 	var err error = nil
@@ -118,6 +122,31 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if filter != nil && len(abilities) > 0 {
+		channelIDs := make([]int, 0, len(abilities))
+		for _, ability := range abilities {
+			channelIDs = append(channelIDs, ability.ChannelId)
+		}
+		var channels []Channel
+		if err = DB.Find(&channels, "id in ?", channelIDs).Error; err != nil {
+			return nil, err
+		}
+		channelByID := make(map[int]*Channel, len(channels))
+		for i := range channels {
+			channelByID[channels[i].Id] = &channels[i]
+		}
+		filteredAbilities := make([]Ability, 0, len(abilities))
+		for _, ability := range abilities {
+			channel, ok := channelByID[ability.ChannelId]
+			if !ok {
+				return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", ability.ChannelId)
+			}
+			if filter(channel) {
+				filteredAbilities = append(filteredAbilities, ability)
+			}
+		}
+		abilities = filteredAbilities
 	}
 	channel := Channel{}
 	if len(abilities) > 0 {

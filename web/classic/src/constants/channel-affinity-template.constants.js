@@ -62,6 +62,7 @@ export const CLAUDE_CLI_HEADER_PASSTHROUGH_TEMPLATE = buildPassHeadersTemplate(
 export const CHANNEL_AFFINITY_RULE_TEMPLATES = {
   codexCli: {
     name: 'codex cli trace',
+    target: 'multi_key',
     model_regex: ['^gpt-.*$'],
     path_regex: ['/v1/responses'],
     key_sources: [{ type: 'gjson', path: 'prompt_cache_key' }],
@@ -74,6 +75,7 @@ export const CHANNEL_AFFINITY_RULE_TEMPLATES = {
   },
   claudeCli: {
     name: 'claude cli trace',
+    target: 'multi_key',
     model_regex: ['^claude-.*$'],
     path_regex: ['/v1/messages'],
     key_sources: [{ type: 'gjson', path: 'metadata.user_id' }],

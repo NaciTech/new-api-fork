@@ -71,6 +71,11 @@ function buildChannelAffinityTooltip(affinity, t) {
     return null;
   }
 
+  const targetText =
+    affinity.configured_target &&
+    affinity.configured_target !== affinity.target
+      ? `${affinity.configured_target} -> ${affinity.target || '-'}`
+      : affinity.target || '-';
   const keySource = affinity.key_source || '-';
   const keyPath = affinity.key_path || affinity.key_key || '-';
   const keyHint = affinity.key_hint || '';
@@ -80,9 +85,27 @@ function buildChannelAffinityTooltip(affinity, t) {
   const lines = [
     t('渠道亲和性'),
     `${t('规则')}：${affinity.rule_name || '-'}`,
+    `${t('目标')}：${targetText}`,
     `${t('分组')}：${affinity.selected_group || '-'}`,
     `${t('Key')}：${keyText}`,
     ...(keyHint ? [`${t('Key 摘要')}：${keyHint}`] : []),
+    ...(affinity.key_affinity_status
+      ? [`${t('Key 亲和状态')}：${affinity.key_affinity_status}`]
+      : []),
+    ...(affinity.preferred_multi_key_index !== undefined &&
+    affinity.preferred_multi_key_index !== null
+      ? [`${t('亲和 Key')}：${affinity.preferred_multi_key_index}`]
+      : []),
+    ...(affinity.selected_multi_key_index !== undefined &&
+    affinity.selected_multi_key_index !== null
+      ? [`${t('实际 Key')}：${affinity.selected_multi_key_index}`]
+      : []),
+    ...(affinity.selected_key_fp
+      ? [`${t('实际 Key 指纹')}：#${affinity.selected_key_fp}`]
+      : []),
+    ...(affinity.fallback_reason
+      ? [`${t('降级原因')}：${affinity.fallback_reason}`]
+      : []),
   ];
 
   return (

@@ -2,18 +2,43 @@ package operation_setting
 
 import "github.com/QuantumNous/new-api/setting/config"
 
+const (
+	ChannelAffinityTargetChannel  = "channel"
+	ChannelAffinityTargetMultiKey = "multi_key"
+)
+
 type ChannelAffinityKeySource struct {
-	Type string `json:"type"` // context_int, context_string, request_header, gjson
+	Type string `json:"type"` // context_int, context_string, request_header, header, gjson
 	Key  string `json:"key,omitempty"`
 	Path string `json:"path,omitempty"`
 }
 
+type ChannelAffinityMappingTarget struct {
+	Type      string `json:"type"` // gjson, header
+	Key       string `json:"key,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Overwrite bool   `json:"overwrite,omitempty"`
+}
+
+type ChannelAffinityMapping struct {
+	Enabled bool                           `json:"enabled"`
+	Targets []ChannelAffinityMappingTarget `json:"targets,omitempty"`
+	// Backward-compatible single-target shorthand:
+	// {"enabled":true,"type":"gjson","path":"prompt_cache_key"}
+	Type      string `json:"type,omitempty"`
+	Key       string `json:"key,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Overwrite bool   `json:"overwrite,omitempty"`
+}
+
 type ChannelAffinityRule struct {
 	Name             string                     `json:"name"`
+	Target           string                     `json:"target,omitempty"` // channel, multi_key
 	ModelRegex       []string                   `json:"model_regex"`
 	PathRegex        []string                   `json:"path_regex"`
 	UserAgentInclude []string                   `json:"user_agent_include,omitempty"`
 	KeySources       []ChannelAffinityKeySource `json:"key_sources"`
+	Mapping          ChannelAffinityMapping     `json:"mapping,omitempty"`
 
 	ValueRegex string `json:"value_regex"`
 	TTLSeconds int    `json:"ttl_seconds"`
@@ -120,4 +145,13 @@ func init() {
 
 func GetChannelAffinitySetting() *ChannelAffinitySetting {
 	return &channelAffinitySetting
+}
+
+func NormalizeChannelAffinityTarget(target string) string {
+	switch target {
+	case ChannelAffinityTargetMultiKey:
+		return ChannelAffinityTargetMultiKey
+	default:
+		return ChannelAffinityTargetChannel
+	}
 }

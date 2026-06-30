@@ -42,12 +42,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { Dialog } from '@/components/dialog'
 import { SettingsSwitchField } from '../../components/settings-form-layout'
 import { RULE_TEMPLATES } from './constants'
-import type { AffinityRule, KeySource } from './types'
+import type { AffinityMapping, AffinityRule, KeySource } from './types'
 
 const KEY_SOURCE_TYPES = [
   'context_int',
   'context_string',
   'request_header',
+  'header',
   'gjson',
 ] as const
 
@@ -67,6 +68,7 @@ const RULE_FORM_ID = 'channel-affinity-rule-form'
 
 interface RuleFormValues {
   name: string
+  target: 'channel' | 'multi_key'
   model_regex_text: string
   path_regex_text: string
   user_agent_include_text: string
@@ -77,6 +79,7 @@ interface RuleFormValues {
   include_model_name: boolean
   include_rule_name: boolean
   param_override_template_json: string
+  mapping_json: string
 }
 
 function normalizeStringList(text: string): string[] {
@@ -111,6 +114,7 @@ export function RuleEditorDialog(props: Props) {
   const form = useForm<RuleFormValues>({
     defaultValues: {
       name: '',
+      target: 'channel',
       model_regex_text: '',
       path_regex_text: '',
       user_agent_include_text: '',
@@ -121,12 +125,14 @@ export function RuleEditorDialog(props: Props) {
       include_model_name: false,
       include_rule_name: true,
       param_override_template_json: '',
+      mapping_json: '',
     },
   })
 
   const resetFromRule = (r: Partial<AffinityRule>) => {
     form.reset({
       name: r.name || '',
+      target: r.target === 'multi_key' ? 'multi_key' : 'channel',
       model_regex_text: (r.model_regex || []).join('\n'),
       path_regex_text: (r.path_regex || []).join('\n'),
       user_agent_include_text: (r.user_agent_include || []).join('\n'),
@@ -139,6 +145,7 @@ export function RuleEditorDialog(props: Props) {
       param_override_template_json: r.param_override_template
         ? JSON.stringify(r.param_override_template, null, 2)
         : '',
+      mapping_json: r.mapping ? JSON.stringify(r.mapping, null, 2) : '',
     })
     const sources = (r.key_sources || []).map(normalizeKeySource)
     setKeySources(sources.length > 0 ? sources : [{ type: 'gjson', path: '' }])
@@ -155,6 +162,7 @@ export function RuleEditorDialog(props: Props) {
     } else {
       form.reset({
         name: '',
+        target: 'channel',
         model_regex_text: '',
         path_regex_text: '',
         user_agent_include_text: '',
@@ -165,6 +173,7 @@ export function RuleEditorDialog(props: Props) {
         include_model_name: false,
         include_rule_name: true,
         param_override_template_json: '',
+        mapping_json: '',
       })
       setKeySources([{ type: 'gjson', path: '' }])
     }
@@ -205,13 +214,34 @@ export function RuleEditorDialog(props: Props) {
       }
     }
 
+    let mapping: AffinityMapping | undefined
+    if (values.mapping_json.trim()) {
+      try {
+        const parsed = JSON.parse(values.mapping_json)
+        if (
+          typeof parsed !== 'object' ||
+          Array.isArray(parsed) ||
+          parsed === null
+        ) {
+          toast.error(t('Affinity mapping must be a JSON object'))
+          return
+        }
+        mapping = parsed as AffinityMapping
+      } catch {
+        toast.error(t('Invalid JSON in affinity mapping'))
+        return
+      }
+    }
+
     const rule: AffinityRule = {
       id: props.rule?.id,
       name: values.name.trim(),
+      target: values.target,
       model_regex: modelRegex,
       path_regex: normalizeStringList(values.path_regex_text),
       user_agent_include: normalizeStringList(values.user_agent_include_text),
       key_sources: validKeySources,
+      mapping,
       value_regex: values.value_regex.trim(),
       ttl_seconds: Number(values.ttl_seconds || 0),
       skip_retry_on_failure: values.skip_retry_on_failure,
@@ -259,6 +289,28 @@ export function RuleEditorDialog(props: Props) {
             placeholder='prefer-by-conversation-id'
             {...form.register('name', { required: true })}
           />
+        </div>
+
+        <div className='grid gap-1.5'>
+          <Label>{t('Affinity Target')}</Label>
+          <Select
+            value={form.watch('target')}
+            onValueChange={(v) => {
+              if (v === 'channel' || v === 'multi_key') {
+                form.setValue('target', v)
+              }
+            }}
+          >
+            <SelectTrigger className='w-full sm:w-[220px]'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                <SelectItem value='channel'>{t('Channel')}</SelectItem>
+                <SelectItem value='multi_key'>{t('Multi-key')}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className='grid gap-3 sm:grid-cols-2'>
@@ -423,6 +475,16 @@ export function RuleEditorDialog(props: Props) {
                 rows={5}
                 placeholder='{"operations": [...]}'
                 {...form.register('param_override_template_json')}
+                className='font-mono text-xs'
+              />
+            </div>
+
+            <div className='grid gap-1.5'>
+              <Label>{t('Affinity Mapping (JSON)')}</Label>
+              <Textarea
+                rows={5}
+                placeholder='{"enabled":true,"targets":[{"type":"gjson","path":"prompt_cache_key"},{"type":"header","key":"X-Trace-Key"}]}'
+                {...form.register('mapping_json')}
                 className='font-mono text-xs'
               />
             </div>

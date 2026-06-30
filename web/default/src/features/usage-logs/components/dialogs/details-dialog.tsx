@@ -477,6 +477,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const channelAffinity = other?.admin_info?.channel_affinity
 
   return (
     <Dialog
@@ -544,6 +545,82 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
             {channelChain && props.isAdmin && (
               <DetailRow label={t('Retry Chain')} value={channelChain} mono />
+            )}
+
+            {channelAffinity && props.isAdmin && (
+              <DetailSection label={t('Channel Affinity')}>
+                <DetailRow
+                  label={t('Rule')}
+                  value={channelAffinity.rule_name || '-'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Target')}
+                  value={
+                    channelAffinity.configured_target &&
+                    channelAffinity.configured_target !== channelAffinity.target
+                      ? `${channelAffinity.configured_target} -> ${channelAffinity.target || '-'}`
+                      : channelAffinity.target || '-'
+                  }
+                  mono
+                />
+                <DetailRow
+                  label={t('Group')}
+                  value={
+                    channelAffinity.using_group ||
+                    channelAffinity.selected_group ||
+                    '-'
+                  }
+                  mono
+                />
+                {channelAffinity.key_hint && (
+                  <DetailRow
+                    label={t('Key Summary')}
+                    value={channelAffinity.key_hint}
+                    mono
+                  />
+                )}
+                <DetailRow
+                  label={t('Key Fingerprint')}
+                  value={channelAffinity.key_fp || '-'}
+                  mono
+                />
+                {channelAffinity.key_affinity_status && (
+                  <DetailRow
+                    label={t('Key Affinity Status')}
+                    value={channelAffinity.key_affinity_status}
+                    mono
+                  />
+                )}
+                {channelAffinity.preferred_multi_key_index != null && (
+                  <DetailRow
+                    label={t('Preferred Key')}
+                    value={channelAffinity.preferred_multi_key_index}
+                    mono
+                  />
+                )}
+                {channelAffinity.selected_multi_key_index != null && (
+                  <DetailRow
+                    label={t('Selected Key')}
+                    value={channelAffinity.selected_multi_key_index}
+                    mono
+                  />
+                )}
+                {channelAffinity.selected_key_fp && (
+                  <DetailRow
+                    label={t('Selected Key Fingerprint')}
+                    value={channelAffinity.selected_key_fp}
+                    mono
+                  />
+                )}
+                {channelAffinity.fallback_reason && (
+                  <DetailRow
+                    label={t('Fallback Reason')}
+                    value={channelAffinity.fallback_reason}
+                    mono
+                  />
+                )}
+              </DetailSection>
             )}
 
             {props.log.token_name && (

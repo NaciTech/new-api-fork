@@ -197,6 +197,10 @@ func (channel *Channel) GetKeys() []string {
 }
 
 func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
+	return channel.GetNextEnabledKeyExcluding(nil)
+}
+
+func (channel *Channel) GetNextEnabledKeyExcluding(excluded map[int]bool) (string, int, *types.NewAPIError) {
 	// If not in multi-key mode, return the original key string directly.
 	if !channel.ChannelInfo.IsMultiKey {
 		return channel.Key, 0, nil
@@ -228,7 +232,7 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	// Collect indexes of enabled keys
 	enabledIdx := make([]int, 0, len(keys))
 	for i := range keys {
-		if getStatus(i) == common.ChannelStatusEnabled {
+		if getStatus(i) == common.ChannelStatusEnabled && !excluded[i] {
 			enabledIdx = append(enabledIdx, i)
 		}
 	}
@@ -268,7 +272,7 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		}
 		for i := 0; i < len(keys); i++ {
 			idx := (start + i) % len(keys)
-			if getStatus(idx) == common.ChannelStatusEnabled {
+			if getStatus(idx) == common.ChannelStatusEnabled && !excluded[idx] {
 				// update polling index for next call (point to the next position)
 				channel.ChannelInfo.MultiKeyPollingIndex = (idx + 1) % len(keys)
 				return keys[idx], idx, nil
@@ -280,6 +284,71 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		// Unknown mode, default to first enabled key (or original key string)
 		return keys[enabledIdx[0]], enabledIdx[0], nil
 	}
+}
+
+func (channel *Channel) HasEnabledKey() bool {
+	return channel.HasEnabledKeyExcluding(nil)
+}
+
+func (channel *Channel) HasEnabledKeyExcluding(excluded map[int]bool) bool {
+	if channel == nil {
+		return false
+	}
+	if !channel.ChannelInfo.IsMultiKey {
+		return true
+	}
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		return false
+	}
+	statusList := channel.ChannelInfo.MultiKeyStatusList
+	for i := range keys {
+		if excluded[i] {
+			continue
+		}
+		if statusList == nil {
+			return true
+		}
+		if status, ok := statusList[i]; !ok || status == common.ChannelStatusEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+func (channel *Channel) GetEnabledKeyByIndex(index int) (string, int, string, bool) {
+	if channel == nil {
+		return "", 0, "channel_nil", false
+	}
+	if !channel.ChannelInfo.IsMultiKey {
+		return "", 0, "not_multi_key", false
+	}
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		return "", 0, "no_keys", false
+	}
+
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if index < 0 || index >= len(keys) {
+		return "", 0, "preferred_key_out_of_range", false
+	}
+	status := common.ChannelStatusEnabled
+	if channel.ChannelInfo.MultiKeyStatusList != nil {
+		if s, ok := channel.ChannelInfo.MultiKeyStatusList[index]; ok {
+			status = s
+		}
+	}
+	if status != common.ChannelStatusEnabled {
+		return "", 0, "preferred_key_disabled", false
+	}
+	key := strings.TrimSpace(keys[index])
+	if key == "" {
+		return "", 0, "preferred_key_empty", false
+	}
+	return key, index, "", true
 }
 
 func (channel *Channel) SaveChannelInfo() error {
