@@ -301,6 +301,11 @@ func (channel *Channel) HasEnabledKeyExcluding(excluded map[int]bool) bool {
 	if len(keys) == 0 {
 		return false
 	}
+
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+
 	statusList := channel.ChannelInfo.MultiKeyStatusList
 	for i := range keys {
 		if excluded[i] {

@@ -121,7 +121,7 @@ func GetRandomSatisfiedChannelFiltered(group string, model string, retry int, fi
 	}
 
 	if filter != nil {
-		filtered := channels[:0]
+		filtered := make([]int, 0, len(channels))
 		for _, channelId := range channels {
 			channel, ok := channelsIDM[channelId]
 			if !ok {
