@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -313,6 +314,31 @@ func (channel *Channel) GetOtherInfo() map[string]interface{} {
 		}
 	}
 	return otherInfo
+}
+
+// GetStatusTime returns when the current disabled state began. Ordinary
+// channel edits do not change this value, so cleanup eligibility remains stable.
+func (channel *Channel) GetStatusTime() int64 {
+	value, ok := channel.GetOtherInfo()["status_time"]
+	if !ok {
+		return 0
+	}
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseInt(typed, 10, 64)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
@@ -741,14 +767,6 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	}
 
 	shouldUpdateAbilities := false
-	defer func() {
-		if shouldUpdateAbilities {
-			err := UpdateAbilityStatus(channelId, status == common.ChannelStatusEnabled)
-			if err != nil {
-				common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
-			}
-		}
-	}()
 	channel, err := GetChannelById(channelId, true)
 	if err != nil {
 		return false
@@ -756,6 +774,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		if channel.Status == status {
 			return false
 		}
+		previousStatus := channel.Status
 
 		if channel.ChannelInfo.IsMultiKey {
 			beforeStatus := channel.Status
@@ -775,22 +794,72 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			channel.Status = status
 			shouldUpdateAbilities = true
 		}
-		err = channel.SaveWithoutKey()
+		reenabling := channel.Status == common.ChannelStatusEnabled && previousStatus != common.ChannelStatusEnabled
+		err = DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Omit("key").Save(channel).Error; err != nil {
+				return err
+			}
+			if reenabling {
+				return channel.UpdateAbilities(tx)
+			}
+			if shouldUpdateAbilities {
+				return tx.Model(&Ability{}).
+					Where("channel_id = ?", channelId).
+					Select("enabled").
+					Update("enabled", channel.Status == common.ChannelStatusEnabled).Error
+			}
+			return nil
+		})
 		if err != nil {
-			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
+			common.SysLog(fmt.Sprintf("failed to update channel status and abilities: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
+			if common.MemoryCacheEnabled {
+				if previousStatus == common.ChannelStatusEnabled {
+					if previousChannel, loadErr := GetChannelById(channelId, true); loadErr == nil {
+						RestoreChannelCache(previousChannel)
+					}
+				} else {
+					EvictDisabledChannelsFromCache([]int{channelId})
+				}
+			}
 			return false
+		}
+		if reenabling {
+			RestoreChannelCache(channel)
 		}
 	}
 	return true
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+	var enabledChannels []Channel
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("tag = ? AND status != ?", tag, common.ChannelStatusEnabled).
+			Find(&enabledChannels).Error; err != nil {
+			return err
+		}
+		for i := range enabledChannels {
+			channel := &enabledChannels[i]
+			channel.Status = common.ChannelStatusEnabled
+			info := channel.GetOtherInfo()
+			delete(info, "status_reason")
+			delete(info, "status_time")
+			channel.SetOtherInfo(info)
+			if err := tx.Omit("key").Save(channel).Error; err != nil {
+				return err
+			}
+			if err := channel.UpdateAbilities(tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	err = UpdateAbilityStatusByTag(tag, true)
-	return err
+	for i := range enabledChannels {
+		RestoreChannelCache(&enabledChannels[i])
+	}
+	return nil
 }
 
 func DisableChannelByTag(tag string) error {

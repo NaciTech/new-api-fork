@@ -12,16 +12,49 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-// RegisterScheduledSystemTasks wires the periodic channel test, upstream model
-// update, and async task polling (Midjourney / Suno / video) jobs into the
-// system task framework so a DB lease dedups execution across multiple master
-// instances and each run is recorded as one task row. Call this before
-// service.StartSystemTaskRunner.
+// RegisterScheduledSystemTasks wires periodic channel maintenance and async
+// task polling jobs into the system task framework so a DB lease deduplicates
+// execution across multiple master instances and each run is recorded as one
+// task row. Call this before service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(abilitiesIndexCleanupHandler{})
+}
+
+type abilitiesIndexCleanupHandler struct{}
+
+func (abilitiesIndexCleanupHandler) Type() string {
+	return model.SystemTaskTypeAbilitiesIndexCleanup
+}
+
+func (abilitiesIndexCleanupHandler) Enabled() bool {
+	return operation_setting.GetAbilitiesIndexCleanupSetting().Enabled
+}
+
+func (abilitiesIndexCleanupHandler) Interval() time.Duration {
+	setting := operation_setting.GetAbilitiesIndexCleanupSetting()
+	return time.Duration(setting.IntervalHours) * time.Hour
+}
+
+func (abilitiesIndexCleanupHandler) NewPayload() any {
+	return service.NewAbilitiesIndexCleanupPayload()
+}
+
+func (abilitiesIndexCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := service.AbilitiesIndexCleanupPayload{}
+	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	result, err := service.RunAbilitiesIndexCleanup(ctx, payload, service.NewSystemTaskProgressReporter(task, runnerID))
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, result, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, result, nil)
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

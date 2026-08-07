@@ -298,6 +298,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "abilities_index_cleanup_setting.enabled",
+		"abilities_index_cleanup_setting.interval_hours",
+		"abilities_index_cleanup_setting.auto_disabled_threshold_hours",
+		"abilities_index_cleanup_setting.batch_size":
+		err = operation_setting.ValidateAbilitiesIndexCleanupSetting(option.Key, option.Value.(string))
+		if err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "console_setting.api_info":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ApiInfo")
 		if err != nil {

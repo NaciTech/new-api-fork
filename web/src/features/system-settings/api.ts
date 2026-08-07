@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 
 import type {
+  AbilitiesIndexCleanupTask,
   ConfirmPaymentComplianceResponse,
   FetchUpstreamRatiosRequest,
   LogCleanupTask,
@@ -72,6 +73,29 @@ export async function getCurrentLogCleanupTask() {
 
 export async function getSystemTask(taskId: string) {
   const res = await api.get<SystemTaskResponse<LogCleanupTask>>(
+    `/api/system-task/${taskId}`
+  )
+  return res.data
+}
+
+export async function startAbilitiesIndexCleanupTask() {
+  const res = await api.post<SystemTaskResponse<AbilitiesIndexCleanupTask>>(
+    '/api/system-task/abilities-index-cleanup'
+  )
+  return res.data
+}
+
+export async function getCurrentAbilitiesIndexCleanupTask() {
+  const res = await api.get<
+    SystemTaskResponse<AbilitiesIndexCleanupTask | null>
+  >('/api/system-task/current', {
+    params: { type: 'abilities_index_cleanup' },
+  })
+  return res.data
+}
+
+export async function getAbilitiesIndexCleanupTask(taskId: string) {
+  const res = await api.get<SystemTaskResponse<AbilitiesIndexCleanupTask>>(
     `/api/system-task/${taskId}`
   )
   return res.data

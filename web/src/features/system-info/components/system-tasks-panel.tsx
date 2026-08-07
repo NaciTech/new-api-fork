@@ -79,6 +79,7 @@ const PROGRESS_BAR_CLASS_NAME: Record<SystemTaskStatus, string> = {
 // Maps backend system task type constants to i18n source keys. Unknown/future
 // types fall back to their raw identifier so the panel never shows blank.
 const TYPE_LABEL: Record<string, string> = {
+  abilities_index_cleanup: 'Ability Index Cleanup',
   log_cleanup: 'Log cleanup',
   channel_test: 'Batch channel test',
   model_update: 'Batch upstream model update',

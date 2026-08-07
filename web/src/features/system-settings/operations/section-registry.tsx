@@ -20,6 +20,7 @@ import { SystemBehaviorSection } from '../general/system-behavior-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
+import { AbilitiesIndexCleanupSection } from '../maintenance/abilities-index-cleanup-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
 import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
@@ -98,6 +99,26 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
+      />
+    ),
+  },
+  {
+    id: 'abilities-index-cleanup',
+    titleKey: 'Ability Index Cleanup',
+    build: (settings: OperationsSettings) => (
+      <AbilitiesIndexCleanupSection
+        defaultValues={{
+          'abilities_index_cleanup_setting.enabled':
+            settings['abilities_index_cleanup_setting.enabled'] ?? false,
+          'abilities_index_cleanup_setting.interval_hours':
+            settings['abilities_index_cleanup_setting.interval_hours'] ?? 24,
+          'abilities_index_cleanup_setting.auto_disabled_threshold_hours':
+            settings[
+              'abilities_index_cleanup_setting.auto_disabled_threshold_hours'
+            ] ?? 24,
+          'abilities_index_cleanup_setting.batch_size':
+            settings['abilities_index_cleanup_setting.batch_size'] ?? 100,
+        }}
       />
     ),
   },

@@ -94,6 +94,22 @@ export type LogCleanupTask = SystemTask<
   LogCleanupTaskResult
 >
 
+export type AbilitiesIndexCleanupTask = SystemTask<
+  {
+    auto_disabled_threshold_hours: number
+    batch_size: number
+  },
+  {
+    total: number
+    processed: number
+    progress: number
+  },
+  {
+    scanned: number
+    pruned: number
+  }
+>
+
 export type SystemTaskResponse<TTask = SystemTask | null> = {
   success: boolean
   message: string
@@ -347,6 +363,10 @@ export type OperationsSettings = {
   WorkerValidKey: string
   WorkerAllowHttpImageRequestEnabled: boolean
   LogConsumeEnabled: boolean
+  'abilities_index_cleanup_setting.enabled': boolean
+  'abilities_index_cleanup_setting.interval_hours': number
+  'abilities_index_cleanup_setting.auto_disabled_threshold_hours': number
+  'abilities_index_cleanup_setting.batch_size': number
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number

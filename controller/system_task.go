@@ -7,9 +7,34 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
+
+func CreateAbilitiesIndexCleanupSystemTask(c *gin.Context) {
+	if !operation_setting.GetAbilitiesIndexCleanupSetting().Enabled {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "abilities index cleanup is disabled",
+		})
+		return
+	}
+	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeAbilitiesIndexCleanup, service.NewAbilitiesIndexCleanupPayload())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "system_task.abilities_index_cleanup", map[string]interface{}{
+		"task_id": task.TaskID,
+		"created": created,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    task.ToResponse(),
+	})
+}
 
 func CreateLogCleanupSystemTask(c *gin.Context) {
 	targetTimestamp, _ := strconv.ParseInt(c.Query("target_timestamp"), 10, 64)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -194,6 +195,9 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
+	if channelAbilitiesExpired(channel, time.Now()) {
+		return nil
+	}
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
@@ -263,6 +267,12 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 			tx.Rollback()
 		}
 		return err
+	}
+	if channelAbilitiesExpired(channel, time.Now()) {
+		if isNewTx {
+			return tx.Commit().Error
+		}
+		return nil
 	}
 
 	// Then add new abilities
@@ -366,7 +376,15 @@ func FixAbility() (int, int, error) {
 	}
 	successCount := 0
 	failCount := 0
-	for _, chunk := range lo.Chunk(channels, 50) {
+	retainedChannels := make([]*Channel, 0, len(channels))
+	now := time.Now()
+	cleanupThreshold, cleanupEnabled := abilitiesIndexCleanupThreshold()
+	for _, channel := range channels {
+		if !cleanupEnabled || !channelDisabledLongEnough(channel, now, cleanupThreshold) {
+			retainedChannels = append(retainedChannels, channel)
+		}
+	}
+	for _, chunk := range lo.Chunk(retainedChannels, 50) {
 		ids := lo.Map(chunk, func(c *Channel, _ int) int { return c.Id })
 		// Delete all abilities of this channel
 		err = DB.Where("channel_id IN ?", ids).Delete(&Ability{}).Error

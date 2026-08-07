@@ -13,11 +13,16 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"gorm.io/gorm"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
-var channelsIDM map[int]*Channel                     // all channels include disabled
+// channelsIDM omits disabled channels whose ability rows are eligible for
+// cleanup; CacheGetChannel falls back to the database for those records.
+var channelsIDM map[int]*Channel
+
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
@@ -31,8 +36,23 @@ func InitChannelCache() {
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
-	DB.Find(&channels)
+	cleanupSetting := operation_setting.GetAbilitiesIndexCleanupSetting()
+	channelQuery := DB
+	if cleanupSetting.Enabled {
+		channelQuery = channelQuery.Where("status != ?", common.ChannelStatusManuallyDisabled)
+	}
+	if err := channelQuery.Find(&channels).Error; err != nil {
+		common.SysError(fmt.Sprintf("failed to load channel cache: %v", err))
+		return
+	}
+	retainedChannels := channels[:0]
+	now := time.Now()
+	cleanupThreshold := time.Duration(cleanupSetting.AutoDisabledThresholdHours) * time.Hour
 	for _, channel := range channels {
+		if cleanupSetting.Enabled && channelDisabledLongEnough(channel, now, cleanupThreshold) {
+			continue
+		}
+		retainedChannels = append(retainedChannels, channel)
 		newChannelId2channel[channel.Id] = channel
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
 			if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
@@ -40,22 +60,17 @@ func InitChannelCache() {
 			}
 		}
 	}
-	var abilities []*Ability
-	DB.Find(&abilities)
-	groups := make(map[string]bool)
-	for _, ability := range abilities {
-		groups[ability.Group] = true
-	}
+	channels = retainedChannels
 	newGroup2model2channels := make(map[string]map[string][]int)
-	for group := range groups {
-		newGroup2model2channels[group] = make(map[string][]int)
-	}
 	for _, channel := range channels {
 		if channel.Status != common.ChannelStatusEnabled {
 			continue // skip disabled channels
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
+			if newGroup2model2channels[group] == nil {
+				newGroup2model2channels[group] = make(map[string][]int)
+			}
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {
@@ -241,13 +256,16 @@ func CacheGetChannel(id int) (*Channel, error) {
 		return GetChannelById(id, true)
 	}
 	channelSyncLock.RLock()
-	defer channelSyncLock.RUnlock()
-
 	c, ok := channelsIDM[id]
-	if !ok {
+	channelSyncLock.RUnlock()
+	if ok {
+		return c, nil
+	}
+	channel, err := GetChannelById(id, true)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("渠道# %d，已不存在", id)
 	}
-	return c, nil
+	return channel, err
 }
 
 func CacheGetChannelInfo(id int) (*ChannelInfo, error) {
@@ -258,14 +276,11 @@ func CacheGetChannelInfo(id int) (*ChannelInfo, error) {
 		}
 		return &channel.ChannelInfo, nil
 	}
-	channelSyncLock.RLock()
-	defer channelSyncLock.RUnlock()
-
-	c, ok := channelsIDM[id]
-	if !ok {
-		return nil, fmt.Errorf("渠道# %d，已不存在", id)
+	channel, err := CacheGetChannel(id)
+	if err != nil {
+		return nil, err
 	}
-	return &c.ChannelInfo, nil
+	return &channel.ChannelInfo, nil
 }
 
 func CacheUpdateChannelStatus(id int, status int) {
@@ -278,19 +293,88 @@ func CacheUpdateChannelStatus(id int, status int) {
 		channel.Status = status
 	}
 	if status != common.ChannelStatusEnabled {
-		// delete the channel from group2model2channels
-		for group, model2channels := range group2model2channels {
-			for model, channels := range model2channels {
-				for i, channelId := range channels {
-					if channelId == id {
-						// remove the channel from the slice
-						group2model2channels[group][model] = append(channels[:i], channels[i+1:]...)
-						break
-					}
+		removeChannelFromRoutingCacheLocked(id)
+	}
+}
+
+func removeChannelFromRoutingCacheLocked(id int) {
+	for group, model2channels := range group2model2channels {
+		for model, channelIDs := range model2channels {
+			retained := channelIDs[:0]
+			for _, channelID := range channelIDs {
+				if channelID != id {
+					retained = append(retained, channelID)
 				}
+			}
+			group2model2channels[group][model] = retained
+		}
+	}
+}
+
+// EvictDisabledChannelsFromCache removes only channels that are still disabled
+// at cache-mutation time. A concurrent re-enable updates or restores the cache
+// under the same lock, preventing a delayed cleanup batch from evicting a newly
+// enabled channel after its database transaction has committed.
+func EvictDisabledChannelsFromCache(channelIDs []int) {
+	if !common.MemoryCacheEnabled || len(channelIDs) == 0 {
+		return
+	}
+	evicted := false
+	channelSyncLock.Lock()
+	for _, channelID := range channelIDs {
+		if channel, ok := channelsIDM[channelID]; ok && channel.Status == common.ChannelStatusEnabled {
+			continue
+		}
+		delete(channelsIDM, channelID)
+		delete(channel2advancedCustomConfig, channelID)
+		removeChannelFromRoutingCacheLocked(channelID)
+		evicted = true
+	}
+	channelSyncLock.Unlock()
+	if evicted {
+		InvalidatePricingCache()
+	}
+}
+
+func RestoreChannelCache(channel *Channel) {
+	if !common.MemoryCacheEnabled || channel == nil {
+		return
+	}
+	channelSyncLock.Lock()
+	if channelsIDM == nil {
+		channelsIDM = make(map[int]*Channel)
+	}
+	if group2model2channels == nil {
+		group2model2channels = make(map[string]map[string][]int)
+	}
+	if channel2advancedCustomConfig == nil {
+		channel2advancedCustomConfig = make(map[int]*dto.AdvancedCustomConfig)
+	}
+	removeChannelFromRoutingCacheLocked(channel.Id)
+	channelsIDM[channel.Id] = channel
+	delete(channel2advancedCustomConfig, channel.Id)
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		if advancedConfig := channel.GetOtherSettings().AdvancedCustom; advancedConfig != nil {
+			channel2advancedCustomConfig[channel.Id] = advancedConfig
+		}
+	}
+	if channel.Status == common.ChannelStatusEnabled {
+		for _, group := range strings.Split(channel.Group, ",") {
+			if group2model2channels[group] == nil {
+				group2model2channels[group] = make(map[string][]int)
+			}
+			for _, model := range strings.Split(channel.Models, ",") {
+				group2model2channels[group][model] = append(group2model2channels[group][model], channel.Id)
+				sort.Slice(group2model2channels[group][model], func(i, j int) bool {
+					left := channelsIDM[group2model2channels[group][model][i]]
+					right := channelsIDM[group2model2channels[group][model][j]]
+					return left.GetPriority() > right.GetPriority()
+				})
 			}
 		}
 	}
+	channelSyncLock.Unlock()
+	InvalidatePricingCache()
 }
 
 func CacheUpdateChannel(channel *Channel) {

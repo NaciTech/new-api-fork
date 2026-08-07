@@ -280,6 +280,7 @@ func SetApiRouter(router *gin.Engine) {
 		systemTaskRoute := apiRouter.Group("/system-task")
 		systemTaskRoute.Use(middleware.RootAuth())
 		{
+			systemTaskRoute.POST("/abilities-index-cleanup", controller.CreateAbilitiesIndexCleanupSystemTask)
 			systemTaskRoute.POST("/log-cleanup", controller.CreateLogCleanupSystemTask)
 			systemTaskRoute.GET("/list", controller.ListSystemTasks)
 			systemTaskRoute.GET("/current", controller.GetCurrentSystemTask)
