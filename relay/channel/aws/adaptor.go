@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -90,13 +89,16 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if info.ChannelOtherSettings.AwsKeyType == dto.AwsKeyTypeApiKey {
-		awsModelId := getAwsModelID(info.UpstreamModelName)
 		a.ClientMode = ClientModeApiKey
-		awsSecret := strings.Split(info.ApiKey, "|")
-		if len(awsSecret) != 2 {
+		creds, err := parseAwsCredentials(info.ApiKey)
+		if err != nil {
+			return "", err
+		}
+		if creds.apiKey == "" {
 			return "", errors.New("invalid aws api key, should be in format of <api-key>|<region>")
 		}
-		return fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse", awsModelId, awsSecret[1]), nil
+		awsModelId := getAwsModelID(info.UpstreamModelName)
+		return fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse", creds.region, awsModelId), nil
 	} else {
 		a.ClientMode = ClientModeAKSK
 		return "", nil

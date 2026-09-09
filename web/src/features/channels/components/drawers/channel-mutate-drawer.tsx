@@ -2332,7 +2332,7 @@ export function ChannelMutateDrawer({
                                       {field.value === 'api_key'
                                         ? t('API Key mode: use APIKey|Region')
                                         : t(
-                                            'AK/SK mode: use AccessKey|SecretAccessKey|Region'
+                                            'AK/SK mode: AccessKey|SecretAccessKey|Region, or STS temporary credentials: AccessKey|SecretAccessKey|SessionToken|Region (keep the trailing | to fall back to the default region)'
                                           )}
                                     </FormDescription>
                                     <FormMessage />
@@ -2933,11 +2933,11 @@ export function ChannelMutateDrawer({
                                     isBatchMode
                                   ) {
                                     keyPlaceholder = t(
-                                      'Enter key, one per line, format: AccessKey|SecretAccessKey|Region'
+                                      'Enter key, one per line, format: AccessKey|SecretAccessKey|Region (STS temporary credentials: AccessKey|SecretAccessKey|SessionToken|Region)'
                                     )
                                   } else if (currentType === 33) {
                                     keyPlaceholder = t(
-                                      'Enter key, format: AccessKey|SecretAccessKey|Region'
+                                      'Enter key, format: AccessKey|SecretAccessKey|Region (STS temporary credentials: AccessKey|SecretAccessKey|SessionToken|Region)'
                                     )
                                   } else if (isBatchMode) {
                                     keyPlaceholder = t(
